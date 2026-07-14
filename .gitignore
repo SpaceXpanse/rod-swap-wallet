@@ -1,4 +1,13 @@
 *.~*
-*test*
-.kilocode
+node_modules/
+dist/
+out/
+release/
+.kilocode/
+.understand-anything/
 docs/maintainer-wiki
+*.log
+tmp/
+temp/
+coverage/
+electron-state/

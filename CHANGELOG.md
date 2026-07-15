@@ -7,10 +7,36 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
 ## [Unreleased]
 
 ### Added
+- Browser OTC runtime implementation:
+  - ECDSA adaptor signature helpers in [`js/ecdsa-adaptor.js`](js/ecdsa-adaptor.js).
+  - Immutable ROD/LTC chain parameters in [`js/otc-chains.js`](js/otc-chains.js).
+  - Versioned local storage management in [`js/otc-storage.js`](js/otc-storage.js).
+  - Manual Nostr envelope handling in [`js/otc-nostr.js`](js/otc-nostr.js).
+  - Swap construction, state machine, and settlement logic in [`js/otc-swap.js`](js/otc-swap.js).
+  - OTC UI tab and validation harness in [`otc-test.html`](otc-test.html).
+- Security hardening: OTC state persistence now automatically strips sensitive private keys (`localChildPrivateKey`, `privateKeyHex`, `privateKeyWif`, `xprv`) from backups/exports.
+- PWA cache update to include new OTC assets.
+
+### Changed
+- Integrated OTC UI into [`index.html`](index.html) and updated [`css/style.css`](css/style.css) for swap-specific layouts.
+- Updated [`sw.js`](sw.js) and [`_headers`](_headers) to support OTC runtime and narrow CSP helper origins.
+
+### Verification
+- OTC runtime validated via [`otc-test.html`](otc-test.html) (6/6 suites passed) and smoke-checked in main wallet UI.
+
+### Added
 - Durable maintainer-wiki ingest of the OTC swap planning documents in [`docs/maintainer-wiki/concept-otc-swap-plan.md`](docs/maintainer-wiki/concept-otc-swap-plan.md), including the Phase 1 boundary that routes ROD name operations through local ROD Core RPC while preserving ordinary chain queries and broadcasting on `api.spacexpanse.org:1234`.
+- Browser OTC runtime scaffolding in [`index.html`](index.html) with new OTC modules [`js/ecdsa-adaptor.js`](js/ecdsa-adaptor.js), [`js/otc-chains.js`](js/otc-chains.js), [`js/otc-storage.js`](js/otc-storage.js), [`js/otc-nostr.js`](js/otc-nostr.js), and [`js/otc-swap.js`](js/otc-swap.js), plus the static validation harness [`otc-test.html`](otc-test.html).
+- Dedicated OTC swap account derivation, deterministic terms hashing, immutable ROD/LTC chain helpers, manual Nostr envelope import/export, helper-mediated Phase 1 ROD name-operation adapter handling, strict swap-state persistence, and browser validation flows for the straight OTC implementation plan.
 
 ### Changed
 - Expanded the architecture overview in [`docs/maintainer-wiki/concept-architecture-overview.md`](docs/maintainer-wiki/concept-architecture-overview.md) to distinguish current wallet runtime behavior from forward-looking OTC swap planning content in [`docs/rod-web-swap-v0.3.2.md`](docs/rod-web-swap-v0.3.2.md) and [`docs/rod-web-swap-v0.3.3.md`](docs/rod-web-swap-v0.3.3.md).
+- Extended [`js/coin.js`](js/coin.js) with reusable [`coinjs.ecdsa`](js/coin.js) helpers, tagged hashing, and adaptor nonce derivation while preserving ordinary transaction-signing output paths through the existing signer.
+- Updated [`sw.js`](sw.js) to cache the OTC scripts and validation harness for offline-first static testing.
+- Narrowed OTC helper deployment expectations in [`_headers`](_headers) and [`index.html`](index.html:505) so the documented Phase 1 helper flow works only for same-origin or explicit local helper origins on port `11999`.
+
+### Security
+- OTC storage sanitization now strips derived child private keys and similar private signing material from [`localStorage`](js/otc-storage.js:75) backups/exports while keeping only live-page session memory in [`js/otc-swap.js`](js/otc-swap.js:161).
 
 ## [2.1.0-beta] - 2026-06-13
 

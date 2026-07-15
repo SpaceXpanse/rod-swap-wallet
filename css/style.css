@@ -655,6 +655,83 @@ body {
 	margin-bottom: 10px;
 }
 
+.otc-risk-banner {
+	margin-bottom: 22px;
+	font-size: 15px;
+	line-height: 1.65;
+}
+
+.otc-grid {
+	margin-top: 12px;
+}
+
+.otc-panel {
+	margin-bottom: 20px;
+	padding: 24px;
+	background: linear-gradient(145deg, rgba(10, 26, 49, 0.94), rgba(4, 12, 25, 0.9));
+	border: 1px solid var(--rod-border);
+	border-radius: 20px;
+	box-shadow: 0 18px 44px rgba(0, 0, 0, 0.24);
+}
+
+.otc-panel h3 {
+	margin-top: 0;
+	margin-bottom: 12px;
+}
+
+.otc-panel p {
+	color: #cbe4f1;
+	line-height: 1.58;
+}
+
+.otc-panel label {
+	display: block;
+	margin-top: 12px;
+	margin-bottom: 6px;
+	font-size: 13px;
+	letter-spacing: 0.4px;
+}
+
+.otc-panel .form-control {
+	margin-bottom: 10px;
+}
+
+.otc-textarea {
+	min-height: 150px;
+	font-family: Consolas, Monaco, monospace;
+	font-size: 12px;
+	line-height: 1.55;
+}
+
+.otc-btn-group {
+	margin-top: 8px;
+	margin-bottom: 8px;
+}
+
+.otc-btn-group .btn {
+	margin-right: 8px;
+	margin-bottom: 8px;
+}
+
+.otc-session-table {
+	margin-bottom: 0;
+}
+
+.otc-session-table th,
+.otc-session-table td {
+	font-size: 12px;
+	vertical-align: middle !important;
+	word-break: break-word;
+}
+
+.otc-session-table td {
+	color: #dceaf3;
+}
+
+.otc-session-table .btn-default {
+	padding: 4px 8px;
+}
+
 .form-control:focus {
 	border-color: var(--rod-cyan);
 	box-shadow: 0 0 0 3px rgba(9, 199, 247, 0.22);
@@ -847,6 +924,11 @@ body {
 	.wallet-secondary-link {
 		display: block;
 		margin: 14px 0 0;
+	}
+
+	.otc-panel {
+		padding: 20px;
+		border-radius: 18px;
 	}
 
 	#walletBalance {

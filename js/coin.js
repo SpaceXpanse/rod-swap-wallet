@@ -108,6 +108,159 @@
 		return coinjs.secureRandomBytes(1)[0];
 	}
 
+	coinjs.ecdsa = {
+		getCurve: function(){
+			return EllipticCurve.getSECCurveByName("secp256k1");
+		},
+
+		getOrder: function(){
+			return this.getCurve().getN();
+		},
+
+		hexToBytes: function(hexValue){
+			if(typeof hexValue !== 'string' || !hexValue.match(/^[a-f0-9]*$/i) || (hexValue.length % 2) !== 0){
+				throw new Error('Expected even-length hex string');
+			}
+			return Crypto.util.hexToBytes(hexValue);
+		},
+
+		bytesToHex: function(byteArray){
+			return Crypto.util.bytesToHex(byteArray || []);
+		},
+
+		fixedBytes: function(byteArray, length){
+			var normalized = byteArray || [];
+			if(normalized.length > length){
+				normalized = normalized.slice(normalized.length - length);
+			}
+			while(normalized.length < length){
+				normalized.unshift(0);
+			}
+			return normalized;
+		},
+
+		scalarFromHex: function(hexValue){
+			return BigInteger.fromByteArrayUnsigned(this.hexToBytes(hexValue));
+		},
+
+		scalarToHex: function(scalarValue){
+			return this.bytesToHex(this.fixedBytes((scalarValue || BigInteger.ZERO).toByteArrayUnsigned(), 32));
+		},
+
+		pointFromHex: function(hexValue){
+			return this.getCurve().getCurve().decodePointHex(hexValue);
+		},
+
+		pointToHex: function(pointValue, compressed){
+			return this.bytesToHex(pointValue.getEncoded(compressed !== false));
+		},
+
+		publicKeyFromPrivate: function(privateKeyHex, compressed){
+			var previousCompression = coinjs.compressed;
+			coinjs.compressed = compressed !== false;
+			var publicKeyHex = coinjs.newPubkey(privateKeyHex);
+			coinjs.compressed = previousCompression;
+			return publicKeyHex;
+		},
+
+		serializeDER: function(r, s){
+			var rBytes = r.toByteArraySigned();
+			var sBytes = s.toByteArraySigned();
+			var derSequence = [0x02, rBytes.length].concat(rBytes).concat([0x02, sBytes.length]).concat(sBytes);
+			derSequence.unshift(derSequence.length);
+			derSequence.unshift(0x30);
+			return derSequence;
+		},
+
+		parseDER: function(signatureValue){
+			var signatureBytes = coinjs.isArray(signatureValue) ? signatureValue.slice(0) : this.hexToBytes(signatureValue);
+			if(signatureBytes[0] !== 0x30){
+				throw new Error('Signature is not valid DER');
+			}
+			var cursor = 2;
+			if(signatureBytes[cursor] !== 0x02){
+				throw new Error('Missing DER integer for r');
+			}
+			var rBytes = signatureBytes.slice(cursor + 2, cursor + 2 + signatureBytes[cursor + 1]);
+			cursor += 2 + signatureBytes[cursor + 1];
+			if(signatureBytes[cursor] !== 0x02){
+				throw new Error('Missing DER integer for s');
+			}
+			var sBytes = signatureBytes.slice(cursor + 2, cursor + 2 + signatureBytes[cursor + 1]);
+			return {
+				r: BigInteger.fromByteArrayUnsigned(rBytes),
+				s: BigInteger.fromByteArrayUnsigned(sBytes)
+			};
+		},
+
+		normalizeLowS: function(scalarValue){
+			var order = this.getOrder();
+			var halfOrder = order.shiftRight(1);
+			return scalarValue.compareTo(halfOrder) > 0 ? order.subtract(scalarValue) : scalarValue;
+		},
+
+		hashToScalar: function(messageHash){
+			var hashBytes = coinjs.isArray(messageHash) ? messageHash.slice(0) : this.hexToBytes(messageHash);
+			return BigInteger.fromByteArrayUnsigned(hashBytes);
+		},
+
+		signRaw: function(messageHash, privateKeyHex, nonceScalar){
+			var curve = this.getCurve();
+			var order = curve.getN();
+			var messageScalar = this.hashToScalar(messageHash);
+			var privateScalar = this.scalarFromHex(privateKeyHex);
+			var noncePoint = curve.getG().multiply(nonceScalar);
+			var rValue = noncePoint.getX().toBigInteger().mod(order);
+			if(rValue.compareTo(BigInteger.ZERO) <= 0){
+				throw new Error('Invalid ECDSA r value');
+			}
+			var sValue = nonceScalar.modInverse(order).multiply(messageScalar.add(privateScalar.multiply(rValue))).mod(order);
+			if(sValue.compareTo(BigInteger.ZERO) <= 0){
+				throw new Error('Invalid ECDSA s value');
+			}
+			return {
+				r: rValue,
+				s: this.normalizeLowS(sValue),
+				noncePoint: noncePoint
+			};
+		},
+
+		verifyRaw: function(messageHash, publicKeyValue, rValue, sValue){
+			var messageScalar = this.hashToScalar(messageHash);
+			var publicPoint = (typeof publicKeyValue === 'string') ? this.pointFromHex(publicKeyValue) : publicKeyValue;
+			return coinjs.verifySignatureRaw(messageScalar, rValue, sValue, publicPoint);
+		}
+	};
+
+	coinjs.sha256 = function(dataBytes){
+		return Crypto.SHA256(dataBytes, {asBytes: true});
+	};
+
+	coinjs.taggedHash = function(tag, bytes){
+		var tagHash = coinjs.sha256(Crypto.charenc.UTF8.stringToBytes(tag));
+		return coinjs.sha256(tagHash.concat(tagHash).concat(bytes || []));
+	};
+
+	coinjs.adaptorNonce = function(options){
+		var ecdsaHelpers = coinjs.ecdsa;
+		var order = ecdsaHelpers.getOrder();
+		var privateKeyBytes = ecdsaHelpers.hexToBytes(options.signingPrivateKey);
+		var auxBytes = options.auxiliaryRandomness ? ecdsaHelpers.hexToBytes(options.auxiliaryRandomness) : coinjs.secureRandomBytes(32);
+		var adaptorPublicKeyBytes = ecdsaHelpers.hexToBytes(options.adaptorPublicKey);
+		var messageHashBytes = coinjs.isArray(options.messageHash) ? options.messageHash.slice(0) : ecdsaHelpers.hexToBytes(options.messageHash);
+		var auxHash = coinjs.taggedHash("ECDSAadaptor/aux", auxBytes);
+		var maskedKeyBytes = [];
+		for(var i = 0; i < 32; i++){
+			maskedKeyBytes.push(privateKeyBytes[i] ^ auxHash[i]);
+		}
+		var nonceSeedBytes = maskedKeyBytes.concat(adaptorPublicKeyBytes).concat(messageHashBytes);
+		var nonceScalar = BigInteger.fromByteArrayUnsigned(coinjs.taggedHash("ECDSAadaptor/non", nonceSeedBytes)).mod(order);
+		if(nonceScalar.compareTo(BigInteger.ZERO) <= 0){
+			nonceScalar = BigInteger.ONE;
+		}
+		return nonceScalar;
+	}
+
 	coinjs.secureRandomRange = function(maxExclusive){
 		if(maxExclusive <= 0 || maxExclusive > 256){
 			throw new Error('secureRandomRange requires a maxExclusive between 1 and 256');
@@ -1571,52 +1724,20 @@
 
 		/* generate a signature from a transaction hash */
 		r.transactionSig = function(index, wif, sigHashType, txhash){
-
-			function serializeSig(r, s) {
-				var rBa = r.toByteArraySigned();
-				var sBa = s.toByteArraySigned();
-
-				var sequence = [];
-				sequence.push(0x02); // INTEGER
-				sequence.push(rBa.length);
-				sequence = sequence.concat(rBa);
-
-				sequence.push(0x02); // INTEGER
-				sequence.push(sBa.length);
-				sequence = sequence.concat(sBa);
-
-				sequence.unshift(sequence.length);
-				sequence.unshift(0x30); // SEQUENCE
-
-				return sequence;
-			}
-
 			var shType = sigHashType || 1;
 			var hash = txhash || Crypto.util.hexToBytes(this.transactionHash(index, shType));
 
 			if(hash){
-				var curve = EllipticCurve.getSECCurveByName("secp256k1");
 				var key = coinjs.wif2privkey(wif);
-				var priv = BigInteger.fromByteArrayUnsigned(Crypto.util.hexToBytes(key['privkey']));
-				var n = curve.getN();
-				var e = BigInteger.fromByteArrayUnsigned(hash);
 				var badrs = 0
+				var signatureObject = false;
 				do {
 					var k = this.deterministicK(wif, hash, badrs);
-					var G = curve.getG();
-					var Q = G.multiply(k);
-					var r = Q.getX().toBigInteger().mod(n);
-					var s = k.modInverse(n).multiply(e.add(priv.multiply(r))).mod(n);
+					signatureObject = coinjs.ecdsa.signRaw(hash, key['privkey'], k);
 					badrs++
-				} while (r.compareTo(BigInteger.ZERO) <= 0 || s.compareTo(BigInteger.ZERO) <= 0);
+				} while (!signatureObject || signatureObject.r.compareTo(BigInteger.ZERO) <= 0 || signatureObject.s.compareTo(BigInteger.ZERO) <= 0);
 
-				// Force lower s values per BIP62
-				var halfn = n.shiftRight(1);
-				if (s.compareTo(halfn) > 0) {
-					s = n.subtract(s);
-				};
-
-				var sig = serializeSig(r, s);
+				var sig = coinjs.ecdsa.serializeDER(signatureObject.r, signatureObject.s);
 				sig.push(parseInt(shType, 10));
 
 				return Crypto.util.bytesToHex(sig);

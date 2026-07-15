@@ -46,6 +46,11 @@
 		<script type="text/javascript" src="js/ellipticcurve.js"></script>
 
 		<script type="text/javascript" src="js/coin.js"></script>
+		<script type="text/javascript" src="js/ecdsa-adaptor.js"></script>
+		<script type="text/javascript" src="js/otc-chains.js"></script>
+		<script type="text/javascript" src="js/otc-storage.js"></script>
+		<script type="text/javascript" src="js/otc-nostr.js"></script>
+		<script type="text/javascript" src="js/otc-swap.js"></script>
 		<script type="text/javascript" src="js/coinbin.js"></script>
 		<script>
 			if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
@@ -80,6 +85,7 @@
 					<div class="collapse navbar-collapse">
 						<ul class="nav navbar-nav">
 							<li><a href="#wallet" data-toggle="tab"><span class="glyphicon glyphicon-briefcase"></span> Wallet</a></li>
+							<li><a href="#otc" data-toggle="tab"><span class="glyphicon glyphicon-transfer"></span> OTC Swap</a></li>
 							<li class="dropdown">
 								<a href="#" class="dropdown-toggle" data-toggle="dropdown"><span class="glyphicon glyphicon-plus"></span> New Address<b class="caret"></b></a>
 								<ul class="dropdown-menu">
@@ -411,7 +417,159 @@
 										</div>
 									</div>
 								</div>
+					</div>
+
+					<div class="tab-pane tab-content" id="otc">
+						<h2>OTC Swap Desk <small>ROD/LTC plan validation workspace</small></h2>
+						<div class="alert alert-danger otc-risk-banner">
+							<b>Critical OTC risk warning:</b> There is no escrow, refund path, fallback signer, validator, HTLC, or private-key transmission in this Phase 1 browser workflow. Wrong setup, wrong signatures, or wrong release timing can permanently lock funds. Use manual verification on every step and never send private keys, WIF keys, swap xprv values, or adaptor secrets to peers.
+						</div>
+						<div id="otcStatus" class="alert hidden"></div>
+						<div class="row otc-grid">
+							<div class="col-md-6">
+								<div class="otc-panel">
+									<h3>1. Swap account derivation</h3>
+									<p>Derive dedicated OTC swap accounts that stay isolated from the main wallet account tree. Publish only swap xpub values.</p>
+									<label>Seller swap seed/passphrase</label>
+									<input id="otcSellerSwapSeed" class="form-control" type="password" placeholder="Seller-only OTC swap seed">
+									<label>Buyer swap seed/passphrase</label>
+									<input id="otcBuyerSwapSeed" class="form-control" type="password" placeholder="Buyer-only OTC swap seed">
+									<button id="otcGenerateSwapAccountsBtn" class="btn btn-primary" type="button">Derive swap accounts</button>
+									<label>Seller swap xpub</label>
+									<input id="otcSellerSwapXpub" class="form-control" type="text" readonly>
+									<label>Seller swap xprv</label>
+									<input id="otcSellerSwapXprv" class="form-control" type="password" readonly>
+									<label>Buyer swap xpub</label>
+									<input id="otcBuyerSwapXpub" class="form-control" type="text" readonly>
+									<label>Buyer swap xprv</label>
+									<input id="otcBuyerSwapXprv" class="form-control" type="password" readonly>
+								</div>
+								<div class="otc-panel">
+									<h3>2. Offer and terms</h3>
+									<label>Seller ROD identity</label>
+									<input id="otcSellerName" class="form-control" type="text" value="alice.rod">
+									<label>Buyer identity</label>
+									<input id="otcBuyerIdentity" class="form-control" type="text" value="bob.rod">
+									<label>Order ID / name</label>
+									<input id="otcOrderId" class="form-control" type="text" value="alice.rod/order-1">
+									<label>Order revision</label>
+									<input id="otcOrderRevision" class="form-control" type="text" value="1">
+									<label>ROD amount</label>
+									<input id="otcRodAmount" class="form-control" type="text" value="1000.00000000">
+									<label>LTC amount</label>
+									<input id="otcLtcAmount" class="form-control" type="text" value="5.00000000">
+									<label>ROD release height</label>
+									<input id="otcReleaseHeight" class="form-control" type="text" value="1500000">
+									<button id="otcCreateOfferBtn" class="btn btn-primary" type="button">Create OTC offer session</button>
+									<label>Current swap ID</label>
+									<input id="otcCurrentSwapId" class="form-control" type="text" readonly>
+									<label>Offer JSON</label>
+									<textarea id="otcOfferJson" class="form-control otc-textarea" readonly></textarea>
+									<label>Canonical terms + terms hash</label>
+									<textarea id="otcTermsJson" class="form-control otc-textarea" readonly></textarea>
+									<label>Funding and claim planning evidence</label>
+									<textarea id="otcFundingEvidence" class="form-control otc-textarea" readonly></textarea>
+								</div>
 							</div>
+							<div class="col-md-6">
+								<div class="otc-panel">
+									<h3>3. Manual Nostr message exchange</h3>
+									<p>These envelopes validate structure and tamper-detect via canonical event IDs. They do not send secrets and do not require live relays.</p>
+									<label>Message type</label>
+									<select id="otcMessageType" class="form-control">
+										<option value="swap_accept">swap_accept</option>
+										<option value="swap_terms">swap_terms</option>
+										<option value="swap_adaptor_point">swap_adaptor_point</option>
+										<option value="swap_ltc_adaptor_signature">swap_ltc_adaptor_signature</option>
+										<option value="swap_ltc_normal_signature">swap_ltc_normal_signature</option>
+										<option value="swap_rod_adaptor_signature">swap_rod_adaptor_signature</option>
+										<option value="swap_rod_normal_signature">swap_rod_normal_signature</option>
+										<option value="swap_rod_funded">swap_rod_funded</option>
+										<option value="swap_ltc_funded">swap_ltc_funded</option>
+										<option value="swap_ready">swap_ready</option>
+										<option value="swap_ltc_claimed">swap_ltc_claimed</option>
+										<option value="swap_secret_recovered">swap_secret_recovered</option>
+										<option value="swap_rod_claimed">swap_rod_claimed</option>
+										<option value="swap_complete">swap_complete</option>
+									</select>
+									<label>Payload JSON</label>
+									<textarea id="otcMessagePayload" class="form-control otc-textarea">{}</textarea>
+									<div class="btn-group otc-btn-group">
+										<button id="otcExportMessageBtn" class="btn btn-primary" type="button">Export envelope</button>
+										<button id="otcImportMessageBtn" class="btn btn-default" type="button">Import envelope</button>
+									</div>
+									<label>Envelope JSON</label>
+									<textarea id="otcMessageEnvelope" class="form-control otc-textarea"></textarea>
+								</div>
+								<div class="otc-panel">
+									<h3>4. Local ROD name helper adapter</h3>
+									<p>Phase 1 name operations are helper-mediated only. Ordinary ROD chain calls remain on the existing public API. Leave the helper URL blank to force the explicit unavailable state. Deployment CSP permits only same-origin helpers or narrow local helper origins on <code>localhost</code>/<code>127.0.0.1</code> port <code>11999</code>.</p>
+									<label>Local helper endpoint URL</label>
+									<input id="otcNameHelperUrl" class="form-control" type="text" placeholder="http://127.0.0.1:11999/otc-name-helper">
+									<button id="otcSaveConfigBtn" class="btn btn-default" type="button">Save helper config</button>
+									<label>ROD name</label>
+									<input id="otcRodName" class="form-control" type="text" value="sf/alice">
+									<label>ROD name JSON object</label>
+									<textarea id="otcRodNameValue" class="form-control otc-textarea">{
+  "v": 1,
+  "t": "otc.offer",
+  "pair": "ROD/LTC"
+}</textarea>
+									<div class="btn-group otc-btn-group">
+										<button id="otcNameLookupBtn" class="btn btn-primary" type="button">Lookup</button>
+										<button id="otcNameRegisterBtn" class="btn btn-default" type="button">Register / update</button>
+									</div>
+									<label>Name adapter output</label>
+									<textarea id="otcNameAdapterOutput" class="form-control otc-textarea" readonly></textarea>
+								</div>
+								<div class="otc-panel">
+									<h3>5. Validation, state timeline, and backup</h3>
+									<p>Use the built-in validation flow or <a href="otc-test.html" target="_blank">open the OTC validation harness</a> for a standalone static check. OTC backups intentionally exclude derived child private keys and other private signing material.</p>
+									<div class="btn-group otc-btn-group">
+										<button id="otcValidateAdaptorBtn" class="btn btn-primary" type="button">Run adaptor tests</button>
+										<button id="otcRunValidationBtn" class="btn btn-default" type="button">Run OTC validation suite</button>
+									</div>
+									<label>Next state</label>
+									<select id="otcNextState" class="form-control">
+										<option value="NEGOTIATING">NEGOTIATING</option>
+										<option value="TERMS_ACCEPTED">TERMS_ACCEPTED</option>
+										<option value="SIGNATURES_EXCHANGED">SIGNATURES_EXCHANGED</option>
+										<option value="ALICE_ROD_FUNDED">ALICE_ROD_FUNDED</option>
+										<option value="BOB_LTC_FUNDED">BOB_LTC_FUNDED</option>
+										<option value="READY">READY</option>
+										<option value="LTC_CLAIMED">LTC_CLAIMED</option>
+										<option value="SECRET_RECOVERED">SECRET_RECOVERED</option>
+										<option value="ROD_CLAIMED">ROD_CLAIMED</option>
+										<option value="COMPLETE">COMPLETE</option>
+									</select>
+									<button id="otcAdvanceStateBtn" class="btn btn-default" type="button">Advance state</button>
+									<label>Validation and smoke output</label>
+									<textarea id="otcValidationOutput" class="form-control otc-textarea" readonly></textarea>
+									<div class="btn-group otc-btn-group">
+										<button id="otcBackupBtn" class="btn btn-primary" type="button">Export backup</button>
+										<button id="otcRestoreBtn" class="btn btn-default" type="button">Restore backup</button>
+									</div>
+									<label>Backup JSON</label>
+									<textarea id="otcBackupJson" class="form-control otc-textarea"></textarea>
+								</div>
+							</div>
+						</div>
+						<div class="otc-panel">
+							<h3>Saved OTC sessions</h3>
+							<table id="otcSessionTable" class="table table-striped table-hover otc-session-table">
+								<thead>
+									<tr>
+										<th>Select</th>
+										<th>Swap ID</th>
+										<th>Role</th>
+										<th>State</th>
+										<th>Terms hash</th>
+									</tr>
+								</thead>
+								<tbody></tbody>
+							</table>
+						</div>
+					</div>
 <div class="tab-pane tab-content" id="newAddress">
 						<h2>New Address <small>create a new address</small></h2>
 						<p>Any keys used you will need to manually store safely as they will be needed later to redeem the credits.</p>

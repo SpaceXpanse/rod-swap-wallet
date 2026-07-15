@@ -2016,6 +2016,10 @@ function rawSubmitDefault(btn){
 
 	validateOutputAmount();
 
+	if(window.rodOtc && window.rodOtc.swap && window.rodOtc.swap.ui){
+		window.rodOtc.swap.ui.init();
+	}
+
 	/* settings page code */
 
 	// Network definitions

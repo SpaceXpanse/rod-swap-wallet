@@ -1,4 +1,4 @@
-const STATIC_CACHE_VERSION = "rod-wallet-static-v2.1.0-beta";
+const STATIC_CACHE_VERSION = "rod-wallet-static-v2.2.0-beta";
 const STATIC_ASSET_URLS = [
   "./",
   "./index.html",
@@ -23,7 +23,13 @@ const STATIC_ASSET_URLS = [
   "./js/jsbn.js",
   "./js/ellipticcurve.js",
   "./js/coin.js",
+  "./js/ecdsa-adaptor.js",
+  "./js/otc-chains.js",
+  "./js/otc-storage.js",
+  "./js/otc-nostr.js",
+  "./js/otc-swap.js",
   "./js/coinbin.js",
+  "./otc-test.html",
   "./images/icon-32.png",
   "./images/icon-192.png",
   "./images/icon-512.png",

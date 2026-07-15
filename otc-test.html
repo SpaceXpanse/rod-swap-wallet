@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>ROD OTC Validation Harness</title>
+	<link rel="stylesheet" href="css/bootstrap.min.css">
+	<link rel="stylesheet" href="css/style.css">
+	<script src="js/jquery-1.9.1.min.js"></script>
+	<script src="js/crypto-min.js"></script>
+	<script src="js/crypto-sha256.js"></script>
+	<script src="js/crypto-sha256-hmac.js"></script>
+	<script src="js/sha512.js"></script>
+	<script src="js/ripemd160.js"></script>
+	<script src="js/aes.js"></script>
+	<script src="js/jsbn.js"></script>
+	<script src="js/ellipticcurve.js"></script>
+	<script src="js/coin.js"></script>
+	<script src="js/ecdsa-adaptor.js"></script>
+	<script src="js/otc-chains.js"></script>
+	<script src="js/otc-storage.js"></script>
+	<script src="js/otc-nostr.js"></script>
+	<script src="js/otc-swap.js"></script>
+</head>
+<body>
+	<div class="container" style="padding-top:32px; padding-bottom:32px;">
+		<h1>ROD OTC Validation Harness</h1>
+		<p>This static page validates OTC namespaces, adaptor primitives, pure chain helpers, storage integrity, Nostr tamper rejection, and helper-unconfigured name operations without transmitting secrets.</p>
+		<button id="runOtcHarnessBtn" class="btn btn-primary">Run OTC Validation</button>
+		<textarea id="runOtcHarnessOutput" class="form-control" style="height:520px; margin-top:18px;"></textarea>
+	</div>
+	<script>
+	$(function(){
+		$('#runOtcHarnessBtn').on('click', function(){
+			var result = window.rodOtc.validation.runAll();
+			$('#runOtcHarnessOutput').val(JSON.stringify(result, null, 2));
+		});
+		$('#runOtcHarnessBtn').trigger('click');
+	});
+	</script>
+</body>
+</html>

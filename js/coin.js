@@ -1075,7 +1075,10 @@
 				k = il.add(new BigInteger([0].concat(Crypto.util.hexToBytes(this.keys.privkey)))).mod(ecparams.getN());
 				key = Crypto.util.bytesToHex(k.toByteArrayUnsigned());
 
+				var previousCompression = coinjs.compressed;
+				coinjs.compressed = true;
 				pubkey = coinjs.newPubkey(key);
+				coinjs.compressed = previousCompression;
 
 				o.keys = {'privkey':key,
 					'pubkey':pubkey,
@@ -1119,12 +1122,32 @@
 			var chain = Crypto.util.hexToBytes(I.slice(64, 128));
 
 			var hd = coinjs.hd();
+			var previousCompression = coinjs.compressed;
+			coinjs.compressed = true;
+			var pubkey = coinjs.newPubkey(I.slice(0, 64));
+			coinjs.compressed = previousCompression;
 			return hd.make({'depth':0,
 				'parent_fingerprint':[0,0,0,0],
 				'child_index':0,
 				'chain_code':chain,
 				'privkey':I.slice(0, 64),
-				'pubkey':coinjs.newPubkey(I.slice(0, 64))});
+				'pubkey':pubkey});
+		}
+
+		// compress a public key for BIP32 extended public key payloads
+		r.compressedPubkeyHex = function(pubkeyHex){
+			var pubkeyBytes = Crypto.util.hexToBytes(pubkeyHex);
+			if(pubkeyBytes.length == 33 && (pubkeyBytes[0] == 0x02 || pubkeyBytes[0] == 0x03)){
+				return pubkeyHex;
+			}
+			if(pubkeyBytes.length == 65 && pubkeyBytes[0] == 0x04){
+				var x = pubkeyBytes.slice(1, 33);
+				var y = pubkeyBytes.slice(33, 65);
+				var prefix = (y[y.length - 1] % 2) == 0 ? 0x02 : 0x03;
+				x.unshift(prefix);
+				return Crypto.util.bytesToHex(x);
+			}
+			throw new Error('HD public key must be compressed');
 		}
 
 		// encode data to a base58 string
@@ -1159,9 +1182,10 @@
 
 			//encode xpub key
 			if(data.pubkey){
+				var pubkeyBytes = Crypto.util.hexToBytes(this.compressedPubkeyHex(data.pubkey));
 				var pub = (coinjs.numToBytes(coinjs.hdkey.pub, 4)).reverse();
 				pub = pub.concat(k);
-				pub = pub.concat(Crypto.util.hexToBytes(data.pubkey));
+				pub = pub.concat(pubkeyBytes);
 				var hash = Crypto.SHA256( Crypto.SHA256(pub, { asBytes: true } ), { asBytes: true } );
 				var checksum = hash.slice(0, 4);
 				var ret = pub.concat(checksum);

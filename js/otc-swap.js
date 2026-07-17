@@ -86,12 +86,50 @@
 		return ((hashBytes[0] << 24) | (hashBytes[1] << 16) | (hashBytes[2] << 8) | hashBytes[3]) & 0x7fffffff;
 	};
 
+	function hdNodeFromAccountKey(swapAccountKey){
+		if(!swapAccountKey || typeof swapAccountKey !== 'string'){
+			throw new Error('Swap account key is missing or invalid');
+		}
+		var node = coinjs.hd(swapAccountKey);
+		if(!node || !node.keys || !node.keys.pubkey){
+			throw new Error('Unable to parse swap account key (expected xprv/xpub)');
+		}
+		return node;
+	}
+
+	function accountXpub(swapAccountKey){
+		var node = hdNodeFromAccountKey(swapAccountKey);
+		if(node.type === 'public'){
+			return swapAccountKey;
+		}
+		if(node.keys_extended && node.keys_extended.pubkey){
+			return node.keys_extended.pubkey;
+		}
+		/* Rebuild xpub at same depth via make */
+		var encoded = coinjs.hd().make({
+			depth: node.depth,
+			parent_fingerprint: node.parent_fingerprint,
+			child_index: node.child_index,
+			chain_code: node.chain_code,
+			pubkey: node.keys.pubkey
+		});
+		if(!encoded || !encoded.pubkey){
+			throw new Error('Unable to export swap account xpub');
+		}
+		return encoded.pubkey;
+	}
+
 	swapModule.deriveSwapKeys = function(swapAccountKey, childIndex){
-		var derivedHd = coinjs.hd(swapAccountKey).derive(childIndex);
+		var account = hdNodeFromAccountKey(swapAccountKey);
+		var derivedHd = account.derive(childIndex);
+		if(!derivedHd || !derivedHd.keys || !derivedHd.keys.pubkey){
+			throw new Error('HD child derivation failed for index ' + childIndex);
+		}
+		var ext = derivedHd.keys_extended || {};
 		return {
 			childIndex: childIndex,
-			xpub: derivedHd.keys_extended.pubkey,
-			xprv: derivedHd.keys_extended.privkey || '',
+			xpub: ext.pubkey || '',
+			xprv: ext.privkey || '',
 			publicKey: derivedHd.keys.pubkey,
 			privateKeyWif: derivedHd.keys.wif || '',
 			privateKeyHex: derivedHd.keys.privkey || ''
@@ -144,15 +182,25 @@
 	};
 
 	swapModule.createOfferSession = function(input){
-		var sellerSwapKeys = swapModule.deriveSwapKeys(input.sellerSwapAccountKey, swapModule.childIndexFromSwapId(input.swapId));
-		var buyerSwapKeys = swapModule.deriveSwapKeys(input.buyerSwapAccountKey, swapModule.childIndexFromSwapId(input.swapId));
+		if(!input || !input.swapId){
+			throw new Error('Swap session input is incomplete');
+		}
+		if(!input.sellerSwapAccountKey){
+			throw new Error('Seller swap account key is required');
+		}
+		if(!input.buyerSwapAccountKey){
+			throw new Error('Buyer swap account key is required');
+		}
+		var childIndex = swapModule.childIndexFromSwapId(input.swapId);
+		var sellerSwapKeys = swapModule.deriveSwapKeys(input.sellerSwapAccountKey, childIndex);
+		var buyerSwapKeys = swapModule.deriveSwapKeys(input.buyerSwapAccountKey, childIndex);
 		var terms = swapModule.buildTerms({
 			swapId: input.swapId,
 			orderId: input.orderId,
 			rodAmount: input.rodAmount,
 			ltcAmount: input.ltcAmount,
-			sellerSwapXpub: coinjs.hd(input.sellerSwapAccountKey).keys_extended.pubkey,
-			buyerSwapXpub: coinjs.hd(input.buyerSwapAccountKey).keys_extended.pubkey,
+			sellerSwapXpub: accountXpub(input.sellerSwapAccountKey),
+			buyerSwapXpub: accountXpub(input.buyerSwapAccountKey),
 			childIndex: sellerSwapKeys.childIndex,
 			releaseRodHeight: input.releaseRodHeight,
 			aliceChildPubKey: sellerSwapKeys.publicKey,

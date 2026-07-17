@@ -6,6 +6,9 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
 
 ## [Unreleased]
 
+### Documentation
+- Carbon Memory was refreshed after OTC codebase analysis; volatile memory now records the current OTC integration surface, indexed-source refresh inputs, and follow-up verification for the missing [`otc-test.html`](otc-test.html) reference.
+
 ### Added
 - Browser OTC runtime implementation:
   - ECDSA adaptor signature helpers in [`js/ecdsa-adaptor.js`](js/ecdsa-adaptor.js).

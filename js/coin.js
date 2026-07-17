@@ -9,7 +9,7 @@
 
 	var coinjs = window.coinjs = function () { };
 
-	/* public vars */
+	/* public vars (defaults; overridden by coinjs.setNetwork) */
 	coinjs.pub = 0x3c;
 	coinjs.priv = 0x4e;
 	coinjs.multisig = 0x4b;
@@ -29,6 +29,78 @@
 	coinjs.key = '12345678901234567890123456789012';
 	coinjs.rodApi = "https://api.spacexpanse.org:1234";
 	coinjs.apiTimeout = 8000;
+
+	/* Multi-coin network profiles (site-wide Coins menu) */
+	var BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+	coinjs.networks = {
+		'ROD': {
+			'code': 'ROD',
+			'name': 'SpaceXpanse ROD',
+			'pub': 0x3c,
+			'priv': 0x4e,
+			'multisig': 0x4b,
+			'hdkey': {'prv': 0x04881eb2, 'pub': 0x0488e4ad},
+			'bech32': {'charset': BECH32_CHARSET, 'version': 0, 'hrp': 'rod'},
+			'uriPrefix': 'rod',
+			'unit': 'ROD',
+			'explorer': {
+				'tx': 'https://explorer.rod.spacexpanse.org/tx/',
+				'addr': 'https://explorer.rod.spacexpanse.org/address/',
+				'block': 'https://explorer.rod.spacexpanse.org/blocks/'
+			},
+			'apiType': 'rod',
+			'apiBase': 'https://api.spacexpanse.org:1234'
+		},
+		'LTC': {
+			'code': 'LTC',
+			'name': 'Litecoin',
+			'pub': 0x30,
+			'priv': 0xb0,
+			'multisig': 0x32,
+			'hdkey': {'prv': 0x019d9cfe, 'pub': 0x019da462},
+			'bech32': {'charset': BECH32_CHARSET, 'version': 0, 'hrp': 'ltc'},
+			'uriPrefix': 'litecoin',
+			'unit': 'LTC',
+			'explorer': {
+				'tx': 'https://litecoinspace.org/tx/',
+				'addr': 'https://litecoinspace.org/address/',
+				'block': 'https://litecoinspace.org/block/'
+			},
+			'apiType': 'esplora',
+			'apiBase': 'https://litecoinspace.org/api'
+		}
+	};
+	coinjs.activeNetwork = 'ROD';
+	coinjs.network = coinjs.networks.ROD;
+
+	coinjs.getNetwork = function(){
+		return coinjs.networks[coinjs.activeNetwork] || coinjs.networks.ROD;
+	};
+
+	coinjs.setNetwork = function(code){
+		var network = coinjs.networks[code] || coinjs.networks.ROD;
+		coinjs.activeNetwork = network.code;
+		coinjs.network = network;
+		coinjs.pub = network.pub;
+		coinjs.priv = network.priv;
+		coinjs.multisig = network.multisig;
+		coinjs.hdkey = {'prv': network.hdkey.prv, 'pub': network.hdkey.pub};
+		coinjs.bech32 = {
+			'charset': network.bech32.charset,
+			'version': network.bech32.version,
+			'hrp': network.bech32.hrp
+		};
+		if(network.apiType === 'rod'){
+			coinjs.rodApi = network.apiBase;
+		}
+		if(window.jQuery){
+			jQuery(document).trigger('coinjsNetworkChanged', [network]);
+		}
+		if(typeof window.CustomEvent == 'function'){
+			window.dispatchEvent(new CustomEvent('coinjsNetworkChanged', {'detail': network}));
+		}
+		return network;
+	};
 
 	coinjs.reportApiStatus = function(isOnline, message, url, status){
 		var detail = {
@@ -568,9 +640,31 @@
 		}
 	}
 
-	/* retreive the balance from a given address */
+	/* retreive the balance from a given address (network-aware) */
 	coinjs.addressBalance = function(address, callback){
-		coinjs.ajax(coinjs.rodApi+'/balance/'+encodeURIComponent(address), function(response){
+		var network = coinjs.getNetwork();
+		if(network.apiType === 'esplora'){
+			coinjs.ajax(network.apiBase+'/address/'+encodeURIComponent(address), function(response){
+				try {
+					var parsed = JSON.parse(response);
+					if(parsed && parsed.error){
+						callback({'success': false, 'error': parsed.error, 'raw': parsed});
+						return;
+					}
+					var chain = (parsed && parsed.chain_stats) || {};
+					var mempool = (parsed && parsed.mempool_stats) || {};
+					var funded = (chain.funded_txo_sum || 0) + (mempool.funded_txo_sum || 0);
+					var spent = (chain.spent_txo_sum || 0) + (mempool.spent_txo_sum || 0);
+					var balance = ((funded - spent) / 100000000).toFixed(8);
+					callback({'success': true, 'data': [{'balance': balance}], 'raw': parsed});
+				} catch (error) {
+					callback({'success': false, 'error': 'Invalid balance response'});
+				}
+			}, "GET");
+			return;
+		}
+
+		coinjs.ajax((network.apiBase || coinjs.rodApi)+'/balance/'+encodeURIComponent(address), function(response){
 			try {
 				var parsed = JSON.parse(response);
 				if (parsed && parsed.error) {
@@ -1346,9 +1440,47 @@
 			return r;
 		}
 
-		/* list unspent transactions */
+		/* list unspent transactions (network-aware) */
 		r.listUnspent = function(address, callback) {
-			coinjs.ajax(coinjs.rodApi+'/unspent/'+encodeURIComponent(address), function(response){
+			var network = coinjs.getNetwork();
+			var fallbackScript = '';
+			var addrDecode = coinjs.addressDecode(address);
+			if (addrDecode && addrDecode.type === 'standard') {
+				var s = coinjs.script();
+				var ph = s.pubkeyHash(address);
+				fallbackScript = Crypto.util.bytesToHex(ph.buffer);
+			} else if (addrDecode && addrDecode.type === 'bech32' && addrDecode.redeemscript) {
+				/* P2WPKH scriptPubKey: OP_0 PUSH20 <program> */
+				fallbackScript = '0014' + addrDecode.redeemscript;
+			}
+
+			if(network.apiType === 'esplora'){
+				coinjs.ajax(network.apiBase+'/address/'+encodeURIComponent(address)+'/utxo', function(response){
+					try {
+						var utxoArray = JSON.parse(response);
+						if(!coinjs.isArray(utxoArray)){
+							callback({'success': false, 'error': 'Unexpected unspent response', 'data': []});
+							return;
+						}
+						var data = [];
+						for (var index = 0; index < utxoArray.length; index++) {
+							var output = utxoArray[index];
+							data.push({
+								'transaction_hash': output.txid || output.transaction_hash,
+								'vout': (typeof output.vout !== 'undefined') ? output.vout : output.index,
+								'value': output.value,
+								'script_pub_key_hex': output.scriptpubkey || output.script || fallbackScript
+							});
+						}
+						callback({'success': true, 'data': data});
+					} catch (error) {
+						callback({'success': false, 'error': 'Invalid unspent response', 'data': []});
+					}
+				}, "GET");
+				return;
+			}
+
+			coinjs.ajax((network.apiBase || coinjs.rodApi)+'/unspent/'+encodeURIComponent(address), function(response){
 				try {
 					var parsed = JSON.parse(response);
 					if (parsed && parsed.error) {
@@ -1358,14 +1490,6 @@
 					}
 
 					var utxoArray = coinjs.isArray(parsed) ? parsed : (parsed && coinjs.isArray(parsed.result) ? parsed.result : []);
-
-					var fallbackScript = '';
-					var addrDecode = coinjs.addressDecode(address);
-					if (addrDecode && addrDecode.type === 'standard') {
-						var s = coinjs.script();
-						var ph = s.pubkeyHash(address);
-						fallbackScript = Crypto.util.bytesToHex(ph.buffer);
-					}
 
 					var data = [];
 					for (var index = 0; index < utxoArray.length; index++) {
@@ -1471,10 +1595,43 @@
 			});
 		}
 
-		/* broadcast a transaction */
+		/* broadcast a transaction (network-aware) */
 		r.broadcast = function(callback, txhex){
 			var tx = txhex || this.serialize();
-			coinjs.ajax(coinjs.rodApi+'/broadcast', function(response){
+			var network = coinjs.getNetwork();
+
+			if(network.apiType === 'esplora'){
+				coinjs.ajax(network.apiBase+'/tx', function(response){
+					var body = (response || '').replace(/^\s+|\s+$/g, '').replace(/^"|"$/g, '');
+					if(/^[a-fA-F0-9]{64}$/.test(body)){
+						callback({
+							'success': true,
+							'txid': body,
+							'error': '',
+							'response': body,
+							'raw': body
+						});
+						return;
+					}
+					var errorMessage = body || 'Broadcast failed';
+					try {
+						var parsedErr = JSON.parse(body);
+						if(parsedErr && (parsedErr.error || parsedErr.message)){
+							errorMessage = parsedErr.error || parsedErr.message;
+						}
+					} catch (e) { /* plain text error from Esplora */ }
+					callback({
+						'success': false,
+						'txid': '',
+						'error': errorMessage,
+						'response': errorMessage,
+						'raw': response
+					});
+				}, "POST", {'body': tx, 'contentType': 'text/plain'});
+				return;
+			}
+
+			coinjs.ajax((network.apiBase || coinjs.rodApi)+'/broadcast', function(response){
 				try {
 					var parsed = JSON.parse(response);
 					var txid = parsed && parsed.result ? parsed.result : '';
@@ -2287,11 +2444,17 @@
 			}
 		};
 
+		var postBody = a;
 		if(m == 'POST'){
-			x.setRequestHeader('Content-type','application/x-www-form-urlencoded');
+			if(a && typeof a === 'object' && a.body != null){
+				x.setRequestHeader('Content-type', a.contentType || 'text/plain');
+				postBody = a.body;
+			} else {
+				x.setRequestHeader('Content-type','application/x-www-form-urlencoded');
+			}
 		}
 
-		x.send(a);
+		x.send(postBody);
 	}
 
 	/* clone an object */

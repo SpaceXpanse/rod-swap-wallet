@@ -585,6 +585,63 @@ body {
 	overflow-wrap: anywhere;
 }
 
+.wallet-address-stack {
+	width: 100%;
+}
+
+.wallet-coin-address {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	cursor: pointer;
+	transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.wallet-coin-address:hover {
+	background: rgba(255, 255, 255, 0.09);
+	border-color: rgba(126, 233, 255, 0.4);
+}
+
+.wallet-coin-address.active {
+	background: rgba(9, 199, 247, 0.12);
+	border-color: rgba(9, 199, 247, 0.55);
+}
+
+.wallet-coin-tag {
+	flex: 0 0 auto;
+	display: inline-block;
+	min-width: 36px;
+	padding: 2px 6px;
+	border-radius: 6px;
+	background: rgba(9, 199, 247, 0.2);
+	color: #7ee9ff;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-align: center;
+}
+
+.wallet-address-value {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+#coinsMenu .label {
+	margin-left: 4px;
+	vertical-align: text-top;
+}
+
+#coinsMenu .coin-check {
+	margin-right: 6px;
+	color: #62e6a6;
+}
+
+#walletShowSpend.disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
 .wallet-actions-card p {
 	color: #cbe4f1;
 	line-height: 1.55;

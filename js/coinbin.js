@@ -13,6 +13,212 @@ return typeof value === "string" && value !== "1";
 
 	var wallet_timer = false;
 	var openWalletData = false;
+	var WALLET_SESSION_KEY = 'rodWalletSession';
+	var ACTIVE_COIN_KEY = 'rodActiveCoin';
+
+	function getActiveCoin(){
+		try {
+			var c = (window.localStorage.getItem(ACTIVE_COIN_KEY) || 'ROD').toUpperCase();
+			return (c === 'LTC') ? 'LTC' : 'ROD';
+		} catch (e) {
+			return 'ROD';
+		}
+	}
+
+	function syncExplorersFromNetwork(){
+		var net = coinjs.getNetwork ? coinjs.getNetwork() : null;
+		if(!net || !net.explorer){
+			return;
+		}
+		explorer_tx = net.explorer.tx;
+		explorer_addr = net.explorer.addr;
+		explorer_block = net.explorer.block || explorer_block;
+	}
+
+	function encodeWifForNetwork(privHex, compressed, privVersion){
+		var r = Crypto.util.hexToBytes(privHex);
+		if(compressed){
+			r.push(0x01);
+		}
+		r.unshift(privVersion);
+		var hash = Crypto.SHA256(Crypto.SHA256(r, {asBytes: true}), {asBytes: true});
+		return coinjs.base58encode(r.concat(hash.slice(0, 4)));
+	}
+
+	function walletMaterialFromWif(wif){
+		var decoded = coinjs.wif2privkey(wif);
+		var pub = coinjs.wif2pubkey(wif);
+		return {
+			privkey: decoded.privkey,
+			compressed: !!decoded.compressed,
+			pubkey: pub.pubkey,
+			wif: wif
+		};
+	}
+
+	function walletWifForActiveNetwork(material){
+		if(!material || !material.privkey){
+			return '';
+		}
+		var prevCompressed = coinjs.compressed;
+		coinjs.compressed = !!material.compressed;
+		var wif = encodeWifForNetwork(material.privkey, !!material.compressed, coinjs.priv);
+		coinjs.compressed = prevCompressed;
+		return wif;
+	}
+
+	function refreshSiteCoinLabels(){
+		var net = coinjs.getNetwork ? coinjs.getNetwork() : {'code':'ROD','unit':'ROD','name':'SpaceXpanse ROD'};
+		var unit = net.unit || net.code || 'ROD';
+		$('#activeCoinBadge').text(unit);
+		$('#walletActiveCoinLabel').text(net.name || unit);
+		$('#walletBalanceCoinTag').text(unit);
+		$('#walletSendCoinLabel').text(unit);
+		$('.js-coin-unit').text(unit);
+		$('.js-coin-name').text(net.name || unit);
+		document.title = net.name + ' Wallet by rod-web-wallet';
+		$('.coin-check').addClass('hidden');
+		$('.coin-check[data-coin="'+net.code+'"]').removeClass('hidden');
+		/* Spend form copy */
+		$('#walletSpend h3').html('<span class="glyphicon glyphicon-send"></span> Send '+unit);
+		$('#walletSpend .text-muted').first().text('Enter a recipient and amount, then review before broadcasting.');
+		$('#walletSpendTo').closest('.walletOptions').find('label').each(function(){
+			var t = $(this).text();
+			if(/Recipient/.test(t)){ $(this).text('Recipient '+unit+' address'); }
+			if(/Amount in/.test(t)){ $(this).text('Amount in '+unit); }
+		});
+	}
+
+	function applyActiveCoin(coin, options){
+		var opts = options || {};
+		var c = (coin === 'LTC') ? 'LTC' : 'ROD';
+		try { window.localStorage.setItem(ACTIVE_COIN_KEY, c); } catch (e) { /* ignore */ }
+		if(coinjs.setNetwork){
+			coinjs.setNetwork(c);
+		}
+		syncExplorersFromNetwork();
+		refreshSiteCoinLabels();
+
+		/* Keep settings panel fields in sync */
+		$("#coinjs_pub").val('0x'+(coinjs.pub).toString(16));
+		$("#coinjs_priv").val('0x'+(coinjs.priv).toString(16));
+		$("#coinjs_multisig").val('0x'+(coinjs.multisig).toString(16));
+		$("#coinjs_hdpub").val('0x'+(coinjs.hdkey.pub).toString(16));
+		$("#coinjs_hdprv").val('0x'+(coinjs.hdkey.prv).toString(16));
+		if(typeof populateNetworkDropdown === 'function'){
+			try { populateNetworkDropdown(); } catch (e2) { /* may run before define */ }
+		}
+
+		if(!opts.skipWallet && openWalletData){
+			/* Re-encode WIF + address for the active network */
+			if(openWalletData.privkey){
+				openWalletData.compressed = (typeof openWalletData.compressed === 'boolean') ? openWalletData.compressed : true;
+				openWalletData.wif = walletWifForActiveNetwork(openWalletData);
+				var prevC = coinjs.compressed;
+				coinjs.compressed = openWalletData.compressed;
+				openWalletData.pubkey = coinjs.newPubkey(openWalletData.privkey);
+				coinjs.compressed = prevC;
+			}
+			renderOpenWallet(openWalletData.addressType || getWalletAddressType());
+		}
+		return c;
+	}
+
+	function setActiveCoin(coin){
+		return applyActiveCoin(coin, {});
+	}
+
+	function updateActiveCoinUi(coin){
+		refreshSiteCoinLabels();
+	}
+
+	/* Persist open-wallet session across page reloads (cleared on Logout).
+	   Stores network-agnostic privkey so Coins menu can re-encode ROD/LTC WIF. */
+	function saveWalletSession(data){
+		if(!data || !data.privkey || !data.pubkey){
+			return;
+		}
+		try {
+			window.localStorage.setItem(WALLET_SESSION_KEY, JSON.stringify({
+				v: 2,
+				privkey: data.privkey,
+				compressed: !!data.compressed,
+				pubkey: data.pubkey,
+				privkeyaes: data.privkeyaes || '',
+				addressType: data.addressType || 'legacy',
+				savedAt: new Date().toISOString()
+			}));
+		} catch (e) {
+			/* quota / private mode — session still works in-memory */
+		}
+	}
+
+	function clearWalletSession(){
+		try {
+			window.localStorage.removeItem(WALLET_SESSION_KEY);
+		} catch (e) { /* ignore */ }
+	}
+
+	function loadWalletSession(){
+		try {
+			var raw = window.localStorage.getItem(WALLET_SESSION_KEY);
+			if(!raw){
+				return null;
+			}
+			var parsed = JSON.parse(raw);
+			if(!parsed){
+				clearWalletSession();
+				return null;
+			}
+			/* Migrate v1 (network-bound WIF) → v2 (privkey hex) */
+			if(parsed.v === 1 && parsed.wif){
+				try {
+					var mat = walletMaterialFromWif(parsed.wif);
+					return {
+						privkey: mat.privkey,
+						compressed: mat.compressed,
+						pubkey: mat.pubkey,
+						privkeyaes: parsed.privkeyaes || '',
+						addressType: parsed.addressType || 'legacy'
+					};
+				} catch (e1) {
+					clearWalletSession();
+					return null;
+				}
+			}
+			if(parsed.v !== 2 || !parsed.privkey || !parsed.pubkey){
+				clearWalletSession();
+				return null;
+			}
+			return {
+				privkey: parsed.privkey,
+				compressed: !!parsed.compressed,
+				pubkey: parsed.pubkey,
+				privkeyaes: parsed.privkeyaes || '',
+				addressType: parsed.addressType || 'legacy'
+			};
+		} catch (e) {
+			clearWalletSession();
+			return null;
+		}
+	}
+
+	function restoreWalletSession(){
+		var session = loadWalletSession();
+		if(!session){
+			return false;
+		}
+		openWalletData = {
+			'privkey': session.privkey,
+			'compressed': session.compressed,
+			'pubkey': session.pubkey,
+			'wif': walletWifForActiveNetwork(session),
+			'privkeyaes': session.privkeyaes,
+			'addressType': session.addressType
+		};
+		renderOpenWallet(session.addressType);
+		return true;
+	}
 
 	function updateApiServerStatus(status){
 		var statusBox = $("#apiServerStatus");
@@ -82,9 +288,20 @@ return typeof value === "string" && value !== "1";
 			return;
 		}
 
+		var net = coinjs.getNetwork ? coinjs.getNetwork() : {'unit':'ROD','uriPrefix':'rod','code':'ROD'};
+		if(openWalletData.privkey){
+			openWalletData.wif = walletWifForActiveNetwork(openWalletData);
+			var prevC = coinjs.compressed;
+			coinjs.compressed = !!openWalletData.compressed;
+			openWalletData.pubkey = coinjs.newPubkey(openWalletData.privkey);
+			coinjs.compressed = prevC;
+		}
+
 		var addressData = getWalletAddressData(openWalletData.pubkey, addressType);
 		openWalletData.addressType = addressType;
+		openWalletData.address = addressData.address;
 		setWalletAddressControls(addressType);
+		refreshSiteCoinLabels();
 
 		$("#walletKeys .walletSegWitRS").addClass("hidden");
 		$("#walletKeys .walletSegWitRS input:text").val('');
@@ -95,11 +312,11 @@ return typeof value === "string" && value !== "1";
 
 		$("#walletToBtn").html(addressData.label+' <span class="caret"></span>');
 		$("#walletAddress").html(addressData.address);
-		$("#walletHistory").attr('href',explorer_addr+addressData.address);
+		$("#walletHistory").attr('href', explorer_addr + addressData.address);
 
 		$("#walletQrCode").html("");
 		var qrcode = new QRCode("walletQrCode");
-		qrcode.makeCode("rod:"+addressData.address);
+		qrcode.makeCode((net.uriPrefix || 'rod') + ':' + addressData.address);
 
 		$("#walletKeys .privkey").val(openWalletData.wif);
 		$("#walletKeys .pubkey").val(openWalletData.pubkey);
@@ -108,17 +325,32 @@ return typeof value === "string" && value !== "1";
 		$("#openLogin").hide();
 		$("#openWallet").removeClass("hidden").show();
 
+		saveWalletSession(openWalletData);
 		walletBalance();
 	}
 
 	function openWallet(keys, privkeyaes, addressType){
+		var material;
+		if(keys.privkey){
+			material = {
+				privkey: keys.privkey,
+				compressed: (typeof keys.compressed === 'boolean') ? keys.compressed : !!coinjs.compressed,
+				pubkey: keys.pubkey,
+				wif: keys.wif || ''
+			};
+		} else {
+			material = walletMaterialFromWif(keys.wif);
+		}
 		openWalletData = {
-			'wif': keys.wif,
-			'pubkey': keys.pubkey,
+			'privkey': material.privkey,
+			'compressed': material.compressed,
+			'pubkey': material.pubkey || keys.pubkey,
+			'wif': material.wif || walletWifForActiveNetwork(material),
 			'privkeyaes': privkeyaes || '',
 			'addressType': addressType
 		};
 
+		saveWalletSession(openWalletData);
 		renderOpenWallet(addressType);
 	}
 
@@ -228,6 +460,7 @@ return typeof value === "string" && value !== "1";
 		$("#openPassConfirm").val("");
 		$("#openWifKey").val("");
 		openWalletData = false;
+		clearWalletSession();
 
 		$("#openLogin").show();
 		$("#openWallet").addClass("hidden").show();
@@ -237,7 +470,8 @@ return typeof value === "string" && value !== "1";
 
 		$("#walletQrCode").html("");
 		var qrcode = new QRCode("walletQrCode");
-		qrcode.makeCode("rod:");
+		var uri = (coinjs.getNetwork && coinjs.getNetwork().uriPrefix) || 'rod';
+		qrcode.makeCode(uri + ":");
 
 		$("#walletKeys .privkey").val("");
 		$("#walletKeys .pubkey").val("");
@@ -271,6 +505,10 @@ return typeof value === "string" && value !== "1";
 	walletSegwitCheckbox.checked = false;
 	syncWalletSegwitState();
 
+	/* Apply saved coin network site-wide, then restore wallet if any. */
+	applyActiveCoin(getActiveCoin(), {skipWallet: true});
+	restoreWalletSession();
+
 	$("#walletToSegWit").click(function(){
 		renderOpenWallet('segwit');
 	});
@@ -299,6 +537,11 @@ return typeof value === "string" && value !== "1";
 
 	$("#walletBalance, #walletAddress, #walletQrCode").click(function(){
 		walletBalance();
+	});
+
+	$(document).on('click', '.walletCoinSelect', function(e){
+		e.preventDefault();
+		setActiveCoin($(this).data('coin'));
 	});
 
 	$("#walletConfirmSend").click(function(){
@@ -386,7 +629,8 @@ return typeof value === "string" && value !== "1";
 
 				}, signed);
 			} else {
-				$("#walletSendConfirmStatus").removeClass("hidden alert-success").addClass('alert-danger').html("You have a confirmed balance of "+dvalue+" ROD, unable to send "+total+" ROD").fadeOut().fadeIn();
+				var unit = (coinjs.getNetwork && coinjs.getNetwork().unit) || 'ROD';
+				$("#walletSendConfirmStatus").removeClass("hidden alert-success").addClass('alert-danger').html("You have a confirmed balance of "+dvalue+" "+unit+", unable to send "+total+" "+unit).fadeOut().fadeIn();
 				thisbtn.attr('disabled',false);
 				$("#walletLoader").addClass("hidden");
 			}
@@ -637,22 +881,29 @@ return typeof value === "string" && value !== "1";
 	});
 
 	function walletBalance(){
-		if($("#walletLoader").hasClass("hidden")){
-			$("#walletLoader").removeClass("hidden");
-			coinjs.addressBalance($("#walletAddress").html(),function(data){
-				if(data["success"]){
-					const v = data["data"][0]["balance"];
-					$("#walletBalance").html(v+" ROD").attr('rel',v).fadeOut().fadeIn();
-				} else {
-					var previousBalance = $("#walletBalance").attr('rel');
-					var fallbackBalance = (!isNaN(previousBalance*1)) ? (previousBalance*1).toFixed(8) : '0.00000000';
-					$("#walletBalance").html(fallbackBalance+" ROD").attr('rel', previousBalance || 0).fadeOut().fadeIn();
-					$("#walletSendStatus").removeClass("hidden").html('<span class="glyphicon glyphicon-exclamation-sign"></span> Unable to refresh wallet balance: '+(data["error"] || 'ROD API error'));
-				}
-
-				$("#walletLoader").addClass("hidden");
-			});
+		if(!$("#walletLoader").hasClass("hidden")){
+			return;
 		}
+		var unit = (coinjs.getNetwork && coinjs.getNetwork().unit) || getActiveCoin();
+		var addr = $("#walletAddress").html() || (openWalletData && openWalletData.address) || '';
+		if(!addr){
+			$("#walletBalance").html('0.00000000 '+unit).attr('rel', 0);
+			return;
+		}
+		$("#walletLoader").removeClass("hidden");
+		coinjs.addressBalance(addr, function(data){
+			if(data["success"]){
+				const v = data["data"][0]["balance"];
+				$("#walletBalance").html(v+" "+unit).attr('rel',v).fadeOut().fadeIn();
+			} else {
+				var previousBalance = $("#walletBalance").attr('rel');
+				var fallbackBalance = (!isNaN(previousBalance*1)) ? (previousBalance*1).toFixed(8) : '0.00000000';
+				$("#walletBalance").html(fallbackBalance+" "+unit).attr('rel', previousBalance || 0).fadeOut().fadeIn();
+				$("#walletSendStatus").removeClass("hidden").html('<span class="glyphicon glyphicon-exclamation-sign"></span> Unable to refresh wallet balance: '+(data["error"] || (unit+' API error')));
+			}
+
+			$("#walletLoader").addClass("hidden");
+		});
 	}
 
 	/* new -> address code */
@@ -2030,6 +2281,11 @@ function rawSubmitDefault(btn){
 			rel: '0x3c;0x4e;0x4b;0x488e4ad;0x4881eb2;true;true;rod'
 		},
 		{
+			name: 'Litecoin Mainnet',
+			value: 'ltc-mainnet',
+			rel: '0x30;0xb0;0x32;0x19da462;0x19d9cfe;true;true;ltc'
+		},
+		{
 			name: 'SpaceXpanse ROD Testnet',
 			value: 'rod-testnet',
 			rel: '0x73;0xc6;0x89;0x43587cf;0x4358394;true;true;trod'
@@ -2115,18 +2371,21 @@ function rawSubmitDefault(btn){
 
 			coinjs.hdkey.pub =  $("#coinjs_hdpub").val()*1;
 			coinjs.hdkey.prv =  $("#coinjs_hdprv").val()*1;
-			coinjs.bech32.hrp = "rod";
+
+			/* Known networks go through setNetwork so Coins menu + APIs stay consistent */
+			if (coinjs.pub == 0x30){   // LTC
+				applyActiveCoin('LTC', {skipWallet: true});
+			} else if (coinjs.pub == 0x3c){ // ROD
+				applyActiveCoin('ROD', {skipWallet: true});
+			} else {
+				coinjs.bech32.hrp = coinjs.bech32.hrp || "rod";
+				if (coinjs.pub == 0x1e){   // DOGE
+					explorer_addr = "https://chain.so/address/DOGE/";
+				}
+			}
 
 			configureBroadcast();
 			configureGetUnspentTx();
-
-            if (coinjs.pub == 0x30){   // LTC
-                explorer_addr = "https://chain.so/address/LTC/";
-                coinjs.bech32.hrp = "ltc";
-            }
-            else if (coinjs.pub == 0x1e){   // DOGE
-                explorer_addr = "https://chain.so/address/DOGE/";
-            }
 
 			$("#statusSettings").addClass("alert-success").removeClass("hidden").html("<span class=\"glyphicon glyphicon-ok\"></span> Settings updates successfully").fadeOut().fadeIn();	
 		} else {
@@ -2160,6 +2419,7 @@ function rawSubmitDefault(btn){
 
 	// reflect initial selected network in the settings fields
 	$("#coinjs_coin").change();
+	refreshSiteCoinLabels();
 
 	function configureBroadcast(){
 		$("#rawSubmitBtn").click(function(){

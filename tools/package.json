@@ -1,0 +1,17 @@
+{
+  "name": "rod-rpc-cors-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local CORS proxy for ROD Core JSON-RPC (browser wallet helper)",
+  "main": "rod-rpc-cors-proxy.js",
+  "bin": {
+    "rod-rpc-cors-proxy": "./rod-rpc-cors-proxy.js"
+  },
+  "scripts": {
+    "start": "node rod-rpc-cors-proxy.js",
+    "build:exe": "pkg rod-rpc-cors-proxy.js --targets node18-win-x64 --output rod-rpc-cors-proxy.exe"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  }
+}

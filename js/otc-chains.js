@@ -29,6 +29,62 @@
 		return definition;
 	}
 
+	chainsModule.withChain = function(chainCode, callback){
+		var previousNetworkCode = coinjs.activeNetwork || 'ROD';
+		try {
+			coinjs.setNetwork(chainCode);
+			return callback(getDefinition(chainCode));
+		} finally {
+			coinjs.setNetwork(previousNetworkCode);
+		}
+	};
+
+	chainsModule.decimalToSats = function(amount){
+		var text = String(amount == null ? '0' : amount).replace(/^\s+|\s+$/g, '');
+		if(!/^\d+(\.\d{0,8})?$/.test(text)){
+			throw new Error('Invalid decimal amount: ' + text);
+		}
+		var parts = text.split('.');
+		var whole = parts[0].replace(/^0+(?=\d)/, '') || '0';
+		var fraction = (parts[1] || '').slice(0, 8);
+		while(fraction.length < 8){
+			fraction += '0';
+		}
+		var sats = parseInt(whole, 10) * 100000000 + parseInt(fraction || '0', 10);
+		if(!isFinite(sats) || sats < 0 || Math.floor(sats) !== sats || sats > 9007199254740991){
+			throw new Error('Amount is outside safe integer range: ' + text);
+		}
+		return sats;
+	};
+
+	chainsModule.satsToDecimal = function(sats){
+		var value = parseInt(sats, 10);
+		if(!isFinite(value) || value < 0){
+			throw new Error('Invalid satoshi amount: ' + sats);
+		}
+		var whole = Math.floor(value / 100000000);
+		var fraction = String(value % 100000000);
+		while(fraction.length < 8){
+			fraction = '0' + fraction;
+		}
+		return whole + '.' + fraction;
+	};
+
+	chainsModule.getWalletMaterialForChain = function(wif, chainCode){
+		return chainsModule.withChain(chainCode, function(){
+			var privateKey = coinjs.wif2privkey(wif);
+			var publicKey = coinjs.wif2pubkey(wif);
+			var address = coinjs.wif2address(wif);
+			return {
+				chainCode: chainCode,
+				wif: wif,
+				privkey: privateKey.privkey,
+				pubkey: publicKey.pubkey,
+				address: address.address
+			};
+		});
+	};
+
 	function hash160(hexValue){
 		return ripemd160(Crypto.SHA256(Crypto.util.hexToBytes(hexValue), {asBytes: true}), {asBytes: true});
 	}
@@ -73,13 +129,7 @@
 	};
 
 	chainsModule.amountToBaseUnits = function(amountString){
-		var parts = (amountString || '0').split('.');
-		var whole = parts[0] || '0';
-		var fraction = (parts[1] || '').slice(0, 8);
-		while(fraction.length < 8){
-			fraction += '0';
-		}
-		return whole + fraction;
+		return String(chainsModule.decimalToSats(amountString));
 	};
 
 	chainsModule.planFunding = function(chainCode, publicKeys, requiredSignatures, amountString){

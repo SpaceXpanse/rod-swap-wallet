@@ -447,11 +447,117 @@
 	};
 
 	/* ============ Tx helpers ============ */
-	function withChain(cc, fn) {
-		var d = CHAINS.definitions[cc], s = { pub: coinjs.pub, priv: coinjs.priv, multisig: coinjs.multisig };
-		coinjs.pub = d.pub; coinjs.priv = d.priv; coinjs.multisig = d.multisig;
-		try { return fn(); } finally { coinjs.pub = s.pub; coinjs.priv = s.priv; coinjs.multisig = s.multisig; }
+	engine.withChain = function (cc, fn) { return CHAINS.withChain(cc, fn); };
+	function withChain(cc, fn) { return engine.withChain(cc, fn); }
+	function txidFromHex(txhex) {
+		var first = Crypto.SHA256(Crypto.util.hexToBytes(txhex), { asBytes: true });
+		return Crypto.util.bytesToHex(Crypto.SHA256(first, { asBytes: true }).reverse());
 	}
+	function promiseFromCoinCallback(work) {
+		var d = $.Deferred();
+		try { work(function (response) { response && response.success ? d.resolve(response) : d.reject((response && response.error) || 'Chain request failed'); }); }
+		catch (error) { d.reject(error.message || String(error)); }
+		return d.promise();
+	}
+	function scriptForAddress(address) {
+		return Crypto.util.bytesToHex(coinjs.script().spendToScript(address).buffer);
+	}
+	function normalizeAmountSats(value) {
+		if (typeof value === 'number') {
+			return value > 21000000 ? Math.round(value) : Math.round(value * 100000000);
+		}
+		return CHAINS.decimalToSats(value);
+	}
+	engine.listUnspent = function (cc, address) {
+		return withChain(cc, function () {
+			return promiseFromCoinCallback(function (done) { coinjs.transaction().listUnspent(address, done); });
+		});
+	};
+	engine.broadcastTx = function (cc, txhex) {
+		return withChain(cc, function () {
+			return promiseFromCoinCallback(function (done) { coinjs.transaction().broadcast(done, txhex); });
+		});
+	};
+	engine.getTransaction = function (cc, txid) {
+		return withChain(cc, function () {
+			return promiseFromCoinCallback(function (done) { coinjs.transaction().getTransaction(txid, done); });
+		});
+	};
+	engine.findFundingOutput = function (cc, txid, expectedAddress, expectedAmount) {
+		var expectedSats = CHAINS.decimalToSats(expectedAmount);
+		return withChain(cc, function () {
+			var expectedScript = scriptForAddress(expectedAddress);
+			return engine.getTransaction(cc, txid).then(function (response) {
+				var outputs = response.data || [];
+				for (var i = 0; i < outputs.length; i++) {
+					var output = outputs[i];
+					var outputSats = normalizeAmountSats(output.value);
+					if ((output.address === expectedAddress || output.script_pub_key_hex === expectedScript) && outputSats === expectedSats) {
+						return {
+							chainCode: cc,
+							txid: txid,
+							vout: output.vout,
+							amount: CHAINS.satsToDecimal(outputSats),
+							value: outputSats,
+							address: expectedAddress,
+							scriptPubKey: output.script_pub_key_hex,
+							confirmations: output.confirmations || 0,
+							verifiedAt: new Date().toISOString()
+						};
+					}
+				}
+				throw new Error(cc + ' funding output not found for ' + expectedAddress + ' amount ' + expectedAmount);
+			});
+		});
+	};
+	engine.buildFundingTx = function (cc, sourceWif, destinationAddress, amountDecimal, feeDecimal) {
+		var wallet = CHAINS.getWalletMaterialForChain(sourceWif, cc);
+		var amountSats = CHAINS.decimalToSats(amountDecimal);
+		var feeSats = CHAINS.decimalToSats(feeDecimal || '0.00001000');
+		return engine.listUnspent(cc, wallet.address).then(function (response) {
+			return withChain(cc, function () {
+				var tx = coinjs.transaction();
+				var selected = [], total = 0, utxos = response.data || [];
+				for (var i = 0; i < utxos.length && total < amountSats + feeSats; i++) {
+					var utxo = utxos[i];
+					var value = normalizeAmountSats(utxo.value);
+					if (!utxo.transaction_hash || utxo.vout == null || value <= 0) continue;
+					tx.addinput(utxo.transaction_hash, utxo.vout, utxo.script_pub_key_hex || '', 0xffffffff);
+					selected.push({ txid: utxo.transaction_hash, vout: utxo.vout, value: value });
+					total += value;
+				}
+				if (total < amountSats + feeSats) throw new Error('Insufficient ' + cc + ' UTXOs: need ' + CHAINS.satsToDecimal(amountSats + feeSats) + ', selected ' + CHAINS.satsToDecimal(total));
+				tx.addoutput(destinationAddress, CHAINS.satsToDecimal(amountSats));
+				var change = total - amountSats - feeSats;
+				if (change > 546) tx.addoutput(wallet.address, CHAINS.satsToDecimal(change));
+				tx.sign(sourceWif);
+				var txhex = tx.serialize();
+				return { chainCode: cc, txhex: txhex, txid: txidFromHex(txhex), sourceAddress: wallet.address, destinationAddress: destinationAddress, amount: CHAINS.satsToDecimal(amountSats), fee: CHAINS.satsToDecimal(feeSats), selectedUtxos: selected, change: CHAINS.satsToDecimal(change > 0 ? change : 0) };
+			});
+		});
+	};
+	engine.buildClaimTxFromFunding = function (cc, fundingEvidence, redeemScript, destinationAddress, feeDecimal) {
+		return withChain(cc, function () {
+			var amountSats = normalizeAmountSats(fundingEvidence.value || fundingEvidence.amount);
+			var feeSats = CHAINS.decimalToSats(feeDecimal || '0.00001000');
+			if (amountSats <= feeSats) throw new Error('Claim amount does not cover fee');
+			var tx = coinjs.transaction();
+			tx.addinput(fundingEvidence.txid, fundingEvidence.vout, redeemScript, 0xffffffff);
+			tx.addoutput(destinationAddress, CHAINS.satsToDecimal(amountSats - feeSats));
+			return tx;
+		});
+	};
+	engine.signClaimTx = function (cc, tx, wif) { return withChain(cc, function () { return tx.transactionSig(0, wif, 1); }); };
+	engine.applyMultisigSignatures = function (cc, tx, redeemScript, signatures) {
+		return withChain(cc, function () {
+			var script = coinjs.script();
+			script.writeOp(0);
+			for (var i = 0; i < signatures.length; i++) script.writeBytes(Crypto.util.hexToBytes(signatures[i]));
+			script.writeBytes(Crypto.util.hexToBytes(redeemScript));
+			tx.ins[0].script = script;
+			return tx;
+		});
+	};
 	engine.buildClaimTx = function (cc, txid, vout, rs, amt, addr, fee) {
 		return withChain(cc, function () {
 			var tx = coinjs.transaction(); tx.addinput(txid, vout, rs, 0xffffffff);
@@ -489,7 +595,7 @@
 	engine.getHistory = function () { try { return JSON.parse(localStorage.getItem(HK)) || []; } catch (e) { return []; } };
 	engine.recordTrade = function (s) {
 		var h = engine.getHistory();
-		h.unshift({ swapId: s.swapId, orderId: s.orderId, role: s.role, state: s.state, pair: 'ROD/LTC', rodAmount: s.terms.rodAmount, ltcAmount: s.terms.ltcAmount, completedAt: new Date().toISOString() });
+		h.unshift({ swapId: s.swapId, orderId: s.orderId, role: s.role, state: s.state, pair: 'ROD/LTC', rodAmount: s.terms.rodAmount, ltcAmount: s.terms.ltcAmount, rodFundingTxid: s.execution && s.execution.rodFunding && s.execution.rodFunding.txid || '', ltcFundingTxid: s.execution && s.execution.ltcFunding && s.execution.ltcFunding.txid || '', ltcClaimTxid: s.execution && s.execution.ltcClaim && s.execution.ltcClaim.txid || '', rodClaimTxid: s.execution && s.execution.rodClaim && s.execution.rodClaim.txid || '', completedAt: new Date().toISOString() });
 		if (h.length > 100) h = h.slice(0, 100);
 		localStorage.setItem(HK, JSON.stringify(h));
 	};

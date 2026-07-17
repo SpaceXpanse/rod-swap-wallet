@@ -181,6 +181,39 @@
 		return session;
 	};
 
+	swapModule.safeAdvance = function(session, nextState, note){
+		if(!session || !session.state){
+			throw new Error('Swap session is missing state');
+		}
+		var stateOrder = ['OPEN', 'NEGOTIATING', 'TERMS_ACCEPTED', 'SIGNATURES_EXCHANGED', 'ALICE_ROD_FUNDED', 'BOB_LTC_FUNDED', 'READY', 'LTC_CLAIMED', 'SECRET_RECOVERED', 'ROD_CLAIMED', 'COMPLETE'];
+		var currentIndex = stateOrder.indexOf(session.state);
+		var nextIndex = stateOrder.indexOf(nextState);
+		if(nextIndex === -1){
+			throw new Error('Unknown OTC state: ' + nextState);
+		}
+		if(currentIndex >= nextIndex){
+			return session;
+		}
+		while(currentIndex + 1 < nextIndex){
+			swapModule.advanceState(session, stateOrder[currentIndex + 1], 'Auto-advanced toward ' + nextState);
+			currentIndex = stateOrder.indexOf(session.state);
+		}
+		return swapModule.advanceState(session, nextState, note);
+	};
+
+	swapModule.validateFundingEvidence = function(evidence, expected){
+		if(!evidence || !evidence.txid){
+			throw new Error('Funding txid is missing');
+		}
+		if(expected && evidence.address !== expected.multisigAddress){
+			throw new Error('Funding address mismatch');
+		}
+		if(expected && String(evidence.amount) !== String(expected.amount)){
+			throw new Error('Funding amount mismatch');
+		}
+		return evidence;
+	};
+
 	swapModule.createOfferSession = function(input){
 		if(!input || !input.swapId){
 			throw new Error('Swap session input is incomplete');

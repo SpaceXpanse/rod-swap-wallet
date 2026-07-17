@@ -1512,9 +1512,14 @@
 			}, "GET");
 		}
 
-		/* list transaction data */
+		/* list transaction data (network-aware) */
 		r.getTransaction = function(txid, callback) {
-			coinjs.ajax(coinjs.rodApi+'/transaction/'+encodeURIComponent(txid), function(response){
+			var network = coinjs.getNetwork();
+			var requestUrl = network.apiType === 'esplora'
+				? network.apiBase+'/tx/'+encodeURIComponent(txid)
+				: (network.apiBase || coinjs.rodApi)+'/transaction/'+encodeURIComponent(txid);
+
+			coinjs.ajax(requestUrl, function(response){
 				try {
 					var parsed = JSON.parse(response);
 					if (parsed && parsed.error) {
@@ -1528,16 +1533,24 @@
 					var data = [];
 					for (var index = 0; index < outputs.length; index++) {
 						var output = outputs[index];
-						if (!output.spentTxId) {
+						var isSpent = !!output.spentTxId || !!output.spent || !!(output.status && output.status.spent);
+						var outputValue = output.value;
+						if(network.apiType !== 'esplora' && typeof outputValue === 'number' && outputValue < 2100000000000000){
+							outputValue = Math.round(outputValue * 100000000);
+						}
+						if (!isSpent) {
 							data.push({
 								'transaction_hash': txid,
-								'vout': output.n,
-								'value': output.value,
-								'script_pub_key_hex': (output.scriptPubKey && output.scriptPubKey.hex) ? output.scriptPubKey.hex : ''
+								'vout': (typeof output.n !== 'undefined') ? output.n : index,
+								'value': outputValue,
+								'script_pub_key_hex': (output.scriptPubKey && output.scriptPubKey.hex) ? output.scriptPubKey.hex : (output.scriptpubkey || output.script || ''),
+								'address': (output.scriptPubKey && output.scriptPubKey.addresses && output.scriptPubKey.addresses[0]) ? output.scriptPubKey.addresses[0] : (output.scriptpubkey_address || output.address || ''),
+								'confirmations': txData.confirmations || (txData.status && txData.status.confirmed ? 1 : 0),
+								'raw': output
 							});
 						}
 					}
-					callback({'success': true, 'data': data});
+					callback({'success': true, 'data': data, 'raw': txData});
 				} catch (error) {
 					callback({'success': false, 'error': 'Invalid transaction response', 'data': []});
 				}

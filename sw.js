@@ -1,4 +1,8 @@
-const STATIC_CACHE_VERSION = "rod-wallet-static-v2.2.0-beta";
+const STATIC_CACHE_VERSION = "rod-wallet-static-v2.2.1-beta";
+/* NOTE: cache.addAll() rejects the whole install if ANY entry 404s.
+   The previous list referenced ./otc-test.html (removed from the repo),
+   so the service worker never installed. It also omitted the OTC engine
+   and UI modules, which would have served a stale, mismatched bundle. */
 const STATIC_ASSET_URLS = [
   "./",
   "./index.html",
@@ -28,8 +32,9 @@ const STATIC_ASSET_URLS = [
   "./js/otc-storage.js",
   "./js/otc-nostr.js",
   "./js/otc-swap.js",
+  "./js/otc-engine.js",
+  "./js/otc-app-ui.js",
   "./js/coinbin.js",
-  "./otc-test.html",
   "./images/icon-32.png",
   "./images/icon-192.png",
   "./images/icon-512.png",

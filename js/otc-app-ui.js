@@ -644,8 +644,12 @@ $(function () {
 		var previousNetworkCode = coinjs.activeNetwork;
 		try {
 			coinjs.setNetwork(chainCode);
+			/* addressBalance captures coinjs.getNetwork() synchronously at
+			   call time, so the global network can be restored immediately.
+			   Restoring inside the async callback left the whole page on LTC
+			   for the duration of the request — any concurrent derivation
+			   (checkWallet poll) then emitted LTC-versioned keys. */
 			coinjs.addressBalance(address, function (response) {
-				coinjs.setNetwork(previousNetworkCode || 'ROD');
 				var balance = balanceResponseAmount(response);
 				if (!response || !response.success || balance == null) {
 					d.reject((response && response.error) || (chainCode + ' balance lookup failed'));
@@ -654,8 +658,9 @@ $(function () {
 				d.resolve({ chainCode: chainCode, address: address, balance: balance });
 			});
 		} catch (error) {
-			coinjs.setNetwork(previousNetworkCode || 'ROD');
 			d.reject((error && error.message) ? error.message : String(error));
+		} finally {
+			coinjs.setNetwork(previousNetworkCode || 'ROD');
 		}
 		return d.promise();
 	}
@@ -782,6 +787,14 @@ $(function () {
 		return eventObject && eventObject.pubkey ? String(eventObject.pubkey) : '';
 	}
 
+	/* True when a relay replays one of OUR OWN events (e.g. after a page
+	   reload, when the engine-level seen{} cache is empty). Signature and
+	   claim handlers must never treat those as counterparty messages. */
+	function isLocalEcho(sess, eventObject) {
+		var pubkey = eventPubkey(eventObject);
+		return !!(pubkey && sess.localNostrPubkey && pubkey === sess.localNostrPubkey);
+	}
+
 	function ensureRemotePeer(session, eventObject) {
 		var pubkey = eventPubkey(eventObject);
 		if (!pubkey) throw new Error('Remote OTC event is missing pubkey');
@@ -801,8 +814,12 @@ $(function () {
 
 	function markAutomationBusy(session, key) {
 		session.automation = session.automation || {};
-		if (session.automation[key]) return false;
-		session.automation[key] = true;
+		var stamp = session.automation[key];
+		/* Flags are per-attempt locks, not durable state: a stamp older than
+		   120s is stale (page reload, swallowed error) and must not block the
+		   swap forever. */
+		if (stamp && (Date.now() - (typeof stamp === 'number' ? stamp : 0)) < 120000) return false;
+		session.automation[key] = Date.now();
 		ENGINE.saveLive(session);
 		return true;
 	}
@@ -831,8 +848,11 @@ $(function () {
 	function verifyFunding(session, chainCode, manualTxid) {
 		var target = fundingTarget(session, chainCode);
 		var txid = $.trim(manualTxid || (session.execution && session.execution[chainCode === 'ROD' ? 'rodFunding' : 'ltcFunding'] && session.execution[chainCode === 'ROD' ? 'rodFunding' : 'ltcFunding'].txid) || '');
-		if (!txid) throw new Error('Enter or receive ' + chainCode + ' funding txid first');
+		if (!txid) return $.Deferred().reject(new Error('Enter or receive ' + chainCode + ' funding txid first')).promise();
 		return ENGINE.findFundingOutput(chainCode, txid, target.multisigAddress, target.amount).then(function (evidence) {
+			/* Set ONLY here: this browser checked the chain API itself.
+			   Remote evidence messages have this flag stripped on receipt. */
+			evidence.verifiedLocally = true;
 			saveExecution(session, chainCode === 'ROD' ? 'rodFunding' : 'ltcFunding', evidence);
 			return evidence;
 		});
@@ -908,7 +928,25 @@ $(function () {
 			});
 			return;
 		}
-		if (latest.role === 'bob' && rodFunding && rodFunding.txid && !(rodFunding.vout != null)) {
+		/* Self-verify own ROD funding output so Alice can derive vout/value
+		   evidence (and share claim signatures) without depending on Bob's
+		   verified-evidence message arriving over Nostr. */
+		if (latest.role === 'alice' && rodFunding && rodFunding.txid && !rodFunding.verifiedLocally) {
+			if (!markAutomationBusy(latest, 'verifyRodSelf')) return;
+			verifyFunding(latest, 'ROD').then(function (evidence) {
+				var liveSession = ENGINE.restoreLive(latest.swapId) || latest;
+				shareReadyClaimSignatures(liveSession);
+				publish(liveSession, 'swap_rod_funded', { funding: evidence });
+				slog(liveSession.swapId, '✓ Auto: own ROD funding output verified');
+				clearAutomationBusy(latest, 'verifyRodSelf');
+				autoContinueSwap(liveSession);
+			}).fail(function (error) {
+				clearAutomationBusy(latest, 'verifyRodSelf');
+				slog(latest.swapId, 'Auto own-ROD verify pending: ' + (error.message || error));
+			});
+			return;
+		}
+		if (latest.role === 'bob' && rodFunding && rodFunding.txid && !rodFunding.verifiedLocally) {
 			if (!markAutomationBusy(latest, 'verifyRod')) return;
 			verifyFunding(latest, 'ROD').then(function (evidence) {
 				var liveSession = ENGINE.restoreLive(latest.swapId) || latest;
@@ -925,7 +963,7 @@ $(function () {
 			});
 			return;
 		}
-		if (latest.role === 'bob' && bothAccepted && rodFunding && rodFunding.vout != null && !(ltcFunding && ltcFunding.txid)) {
+		if (latest.role === 'bob' && bothAccepted && rodFunding && rodFunding.verifiedLocally && rodFunding.vout != null && !(ltcFunding && ltcFunding.txid)) {
 			if (!latest.bilateralReady) {
 				slog(latest.swapId, '⚠ Bilateral readiness flag missing after verified ROD funding; continuing to LTC funding because both peers accepted and ROD output is verified');
 			}
@@ -943,7 +981,23 @@ $(function () {
 		if (latest.role === 'bob' && rodFunding && rodFunding.vout != null && !(ltcFunding && ltcFunding.txid) && !bothAccepted) {
 			slog(latest.swapId, 'Auto LTC funding waiting: both peers must accept before Bob funds LTC');
 		}
-		if (latest.role === 'alice' && ltcFunding && ltcFunding.txid && !(ltcFunding.vout != null)) {
+		/* Self-verify own LTC funding output (mirror of Alice's ROD self-verify). */
+		if (latest.role === 'bob' && ltcFunding && ltcFunding.txid && !ltcFunding.verifiedLocally) {
+			if (!markAutomationBusy(latest, 'verifyLtcSelf')) return;
+			verifyFunding(latest, 'LTC').then(function (evidence) {
+				var liveSession = ENGINE.restoreLive(latest.swapId) || latest;
+				shareReadyClaimSignatures(liveSession);
+				publish(liveSession, 'swap_ltc_funded', { funding: evidence });
+				slog(liveSession.swapId, '✓ Auto: own LTC funding output verified');
+				clearAutomationBusy(latest, 'verifyLtcSelf');
+				autoContinueSwap(liveSession);
+			}).fail(function (error) {
+				clearAutomationBusy(latest, 'verifyLtcSelf');
+				slog(latest.swapId, 'Auto own-LTC verify pending: ' + (error.message || error));
+			});
+			return;
+		}
+		if (latest.role === 'alice' && ltcFunding && ltcFunding.txid && !ltcFunding.verifiedLocally) {
 			if (!markAutomationBusy(latest, 'verifyLtc')) return;
 			verifyFunding(latest, 'LTC').then(function (evidence) {
 				var liveSession = ENGINE.restoreLive(latest.swapId) || latest;
@@ -1007,6 +1061,30 @@ $(function () {
 		showActiveSwap(session.swapId);
 	}
 
+	/* Emulate OP_CHECKMULTISIG before broadcast: every signature must verify,
+	   in order, against the redeem-script pubkeys [alice, bob]. Catches a bad
+	   or misattributed counterparty signature locally instead of broadcasting
+	   a transaction the network is guaranteed to reject. */
+	function verifyClaimSignatures(session, tx, orderedSigs) {
+		var redeemPubkeys = [session.terms.aliceChildPubKey, session.terms.bobChildPubKey];
+		var sighash = Crypto.util.hexToBytes(tx.transactionHash(0, 1));
+		var pubkeyIndex = 0;
+		for (var i = 0; i < orderedSigs.length; i++) {
+			if (!orderedSigs[i]) return false;
+			var sigBytes = Crypto.util.hexToBytes(orderedSigs[i]);
+			var matched = false;
+			while (pubkeyIndex < redeemPubkeys.length && !matched) {
+				var decompressed = coinjs.pubkeydecompress(redeemPubkeys[pubkeyIndex]);
+				pubkeyIndex++;
+				if (!decompressed) continue;
+				try { matched = coinjs.verifySignature(sighash, sigBytes, Crypto.util.hexToBytes(decompressed)); }
+				catch (verifyError) { matched = false; }
+			}
+			if (!matched) return false;
+		}
+		return true;
+	}
+
 	function buildClaim(session, chainCode, fundingKey, claimKey, messageType) {
 		var funding = session.execution && session.execution[fundingKey];
 		if (!funding || funding.vout == null) throw new Error(chainCode + ' funding evidence is missing');
@@ -1020,7 +1098,17 @@ $(function () {
 			slog(session.swapId, '→ Re-sent local ' + chainCode + ' claim signature; waiting for counterparty signature');
 			throw new Error('Local claim signature sent. Wait for counterparty signature before broadcast.');
 		}
-		ENGINE.applyMultisigSignatures(chainCode, tx, redeemScript, orderedMultisigSignatures(session, localSig, remoteSig));
+		var orderedSigs = orderedMultisigSignatures(session, localSig, remoteSig);
+		if (!verifyClaimSignatures(session, tx, orderedSigs)) {
+			/* Drop the stored remote signature so a fresh (valid) one can be
+			   accepted; the local one is deterministic and re-derivable. */
+			var remoteKey = chainCode === 'LTC' ? 'remoteLtcClaimSignature' : 'remoteRodClaimSignature';
+			session[remoteKey] = '';
+			ENGINE.saveLive(session);
+			slog(session.swapId, '✗ ' + chainCode + ' claim signature set failed local CHECKMULTISIG verification; cleared stored counterparty signature');
+			throw new Error(chainCode + ' claim signatures failed local verification — waiting for a valid counterparty signature');
+		}
+		ENGINE.applyMultisigSignatures(chainCode, tx, redeemScript, orderedSigs);
 		return ENGINE.broadcastTx(chainCode, tx.serialize()).then(function (response) {
 			var evidence = { chainCode: chainCode, txid: response.txid, txhex: tx.serialize(), localSignature: localSig, remoteSignature: remoteSig, completedSigHex: localSig, broadcastAt: new Date().toISOString() };
 			saveExecution(session, claimKey, evidence);
@@ -1231,6 +1319,20 @@ $(function () {
 			if (!peer) throw new Error('Enter counterparty identity, or Take an order on the Dashboard first');
 			if (!peerXpub) throw new Error('Enter counterparty swap xpub, or Take an order on the Dashboard first');
 			if (peerXpub === swapAcct.xpub) throw new Error('Counterparty xpub must differ from your swap xpub');
+
+			/* Dust-limit validation: both the funding output AND the claim
+			   output (funding minus fee) must exceed the network dust
+			   threshold — otherwise the tx will be rejected by nodes. */
+			var DUST_LIMIT = 546; /* satoshis — applies to both ROD and LTC P2SH outputs */
+			var rodSats = CHAINS.decimalToSats($('#nsRod').val());
+			var ltcSats = CHAINS.decimalToSats($('#nsLtc').val());
+			var rodClaimFeeSats = CHAINS.decimalToSats(claimFee('ROD'));
+			var ltcClaimFeeSats = CHAINS.decimalToSats(claimFee('LTC'));
+			if (rodSats < DUST_LIMIT) throw new Error('ROD amount (' + rodSats + ' sats) is below dust limit (' + DUST_LIMIT + ' sats). Minimum: ' + CHAINS.satsToDecimal(DUST_LIMIT) + ' ROD');
+			if (ltcSats < DUST_LIMIT) throw new Error('LTC amount (' + ltcSats + ' sats) is below dust limit (' + DUST_LIMIT + ' sats). Minimum: ' + CHAINS.satsToDecimal(DUST_LIMIT) + ' LTC');
+			if (rodSats - rodClaimFeeSats < DUST_LIMIT) throw new Error('ROD claim output (' + (rodSats - rodClaimFeeSats) + ' sats) would be dust after fee. Increase ROD amount.');
+			if (ltcSats - ltcClaimFeeSats < DUST_LIMIT) throw new Error('LTC claim output (' + (ltcSats - ltcClaimFeeSats) + ' sats) would be dust after fee. Increase LTC amount.');
+
 			$btn.prop('disabled', true);
 			flash('info', 'Checking wallet balance…');
 
@@ -1310,8 +1412,8 @@ $(function () {
 
 	function localRoleFromTerms(terms) {
 		if (!checkWallet() || !swapAcct || !swapAcct.xprv || !swapAcct.xpub || !terms) return '';
-		if (terms.sellerSwapXpub === swapAcct.xpub) return 'alice';
-		if (terms.buyerSwapXpub === swapAcct.xpub) return 'bob';
+		if (ENGINE.sameExtendedKey(terms.sellerSwapXpub, swapAcct.xpub)) return 'alice';
+		if (ENGINE.sameExtendedKey(terms.buyerSwapXpub, swapAcct.xpub)) return 'bob';
 		return '';
 	}
 
@@ -1423,12 +1525,12 @@ $(function () {
 			ENGINE.saveLive(sess);
 			refreshSwaps();
 		}
-		if ((env.type.indexOf('adaptor_signature') > -1) && p.hex) {
+		if ((env.type.indexOf('adaptor_signature') > -1) && p.hex && !isLocalEcho(sess, eventObject)) {
 			sess.remoteAdaptorSignature = p.hex;
 			slog(env.swapId, '← Remote adaptor sig');
 			ENGINE.saveLive(sess);
 		}
-		if ((env.type.indexOf('normal_signature') > -1) && (p.hex || p.signature)) {
+		if ((env.type.indexOf('normal_signature') > -1) && (p.hex || p.signature) && !isLocalEcho(sess, eventObject)) {
 			var sig = p.hex || p.signature;
 			sess.remoteNormalSignature = sig;
 			if (env.type === 'swap_ltc_normal_signature') sess.remoteLtcClaimSignature = sig;
@@ -1439,7 +1541,11 @@ $(function () {
 		}
 		if (env.type === 'swap_rod_funded' && p.funding) {
 			try { ensureRemotePeer(sess, eventObject); } catch (peerError3) { slog(env.swapId, peerError3.message || peerError3); return; }
-			sess.execution = sess.execution || {}; sess.execution.rodFunding = p.funding;
+			/* Merge (not replace) so locally-derived fields survive, and strip
+			   verifiedLocally: remote claims are never local verification. */
+			var rodEvidence = $.extend({}, p.funding); delete rodEvidence.verifiedLocally;
+			sess.execution = sess.execution || {};
+			sess.execution.rodFunding = $.extend({}, sess.execution.rodFunding || {}, rodEvidence);
 			try { SWAP.safeAdvance(sess, 'ALICE_ROD_FUNDED', 'Remote ROD funding evidence'); } catch (e1) {}
 			slog(env.swapId, '← ROD funding evidence'); ENGINE.saveLive(sess);
 			shareReadyClaimSignatures(sess);
@@ -1447,28 +1553,30 @@ $(function () {
 		}
 		if (env.type === 'swap_ltc_funded' && p.funding) {
 			try { ensureRemotePeer(sess, eventObject); } catch (peerError4) { slog(env.swapId, peerError4.message || peerError4); return; }
-			sess.execution = sess.execution || {}; sess.execution.ltcFunding = p.funding;
+			var ltcEvidence = $.extend({}, p.funding); delete ltcEvidence.verifiedLocally;
+			sess.execution = sess.execution || {};
+			sess.execution.ltcFunding = $.extend({}, sess.execution.ltcFunding || {}, ltcEvidence);
 			try { SWAP.safeAdvance(sess, 'BOB_LTC_FUNDED', 'Remote LTC funding evidence'); } catch (e2) {}
 			slog(env.swapId, '← LTC funding evidence'); ENGINE.saveLive(sess);
 			shareReadyClaimSignatures(sess);
 			autoContinueSwap(sess);
 		}
-		if (env.type === 'swap_ltc_claimed') {
+		if (env.type === 'swap_ltc_claimed' && !isLocalEcho(sess, eventObject)) {
 			sess.execution = sess.execution || {}; sess.execution.ltcClaim = p;
 			try { SWAP.safeAdvance(sess, 'LTC_CLAIMED', 'Remote LTC claim evidence'); } catch (e3) {}
 			slog(env.swapId, '← LTC claimed evidence'); ENGINE.saveLive(sess);
 			if (sess.role === 'bob' && p.completedSigHex) tryRecover(sess, p.completedSigHex);
 		}
-		if (env.type === 'swap_secret_recovered') {
+		if (env.type === 'swap_secret_recovered' && !isLocalEcho(sess, eventObject)) {
 			try { SWAP.safeAdvance(sess, 'SECRET_RECOVERED', 'Remote secret recovery evidence'); } catch (e4) {}
 			slog(env.swapId, '← Secret recovery evidence'); ENGINE.saveLive(sess);
 		}
-		if (env.type === 'swap_rod_claimed') {
+		if (env.type === 'swap_rod_claimed' && !isLocalEcho(sess, eventObject)) {
 			sess.execution = sess.execution || {}; sess.execution.rodClaim = p;
 			try { SWAP.safeAdvance(sess, 'ROD_CLAIMED', 'Remote ROD claim evidence'); } catch (e5) {}
 			slog(env.swapId, '← ROD claimed evidence'); ENGINE.saveLive(sess);
 		}
-		if (env.type === 'swap_complete') {
+		if (env.type === 'swap_complete' && !isLocalEcho(sess, eventObject)) {
 			sess.state = 'COMPLETE'; ENGINE.saveLive(sess);
 			ENGINE.recordTrade(sess);
 			slog(env.swapId, '✓ COMPLETE');
@@ -1577,8 +1685,40 @@ $(function () {
 	});
 
 	/* ============ INIT ============ */
+	/* Automation locks are per-attempt, not durable state: clear any that a
+	   previous page run left behind, then resume automation for every live
+	   session so a reload never strands a swap mid-flow. */
+	(function resumeAfterReload() {
+		var all = ENGINE.loadLive(), changed = false;
+		for (var id in all) {
+			if (all[id] && all[id].automation) { delete all[id].automation; changed = true; }
+		}
+		if (changed) localStorage.setItem('rodOtcLive', JSON.stringify(all));
+		setTimeout(function () {
+			var sessions = ENGINE.loadLive();
+			for (var swapId in sessions) {
+				var restored = ENGINE.restoreLive(swapId);
+				if (restored && !restored.declined && restored.state !== 'COMPLETE') {
+					try { autoContinueSwap(restored); } catch (e) { log('Resume failed for ' + short(swapId) + ': ' + (e.message || e)); }
+				}
+			}
+		}, 4000); /* give relays time to connect first */
+	})();
 	startNostr();
 	refreshConnStatus();
+	/* Liveness tick: automation used to advance only on incoming Nostr events
+	   or manual refresh, so one failed verify (e.g. API 404 right after
+	   broadcast) stranded the swap. Re-drive every live session periodically;
+	   markAutomationBusy() locks keep this idempotent and non-overlapping. */
+	setInterval(function () {
+		var liveSessions = ENGINE.loadLive();
+		for (var liveSwapId in liveSessions) {
+			var liveSession = ENGINE.restoreLive(liveSwapId);
+			if (liveSession && !liveSession.declined && liveSession.state !== 'COMPLETE') {
+				try { autoContinueSwap(liveSession); } catch (tickError) {}
+			}
+		}
+	}, 30000);
 	setInterval(function () {
 		if ($('#otc').is(':visible')) refreshRelayStatus();
 	}, 5000);

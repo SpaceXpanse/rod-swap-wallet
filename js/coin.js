@@ -1559,8 +1559,17 @@
 						var output = outputs[index];
 						var isSpent = !!output.spentTxId || !!output.spent || !!(output.status && output.status.spent);
 						var outputValue = output.value;
-						if(network.apiType !== 'esplora' && typeof outputValue === 'number' && outputValue < 2100000000000000){
-							outputValue = Math.round(outputValue * 100000000);
+						/* Both esplora and the ROD /transaction/ endpoint return
+						   satoshi integers — do NOT multiply by 1e8.  Only
+						   decimal-string values (containing '.') need conversion. */
+						if (typeof outputValue === 'number') {
+							outputValue = Math.round(outputValue);
+						} else if (typeof outputValue === 'string' && outputValue.indexOf('.') !== -1) {
+							var parts = outputValue.split('.');
+							var whole = parseInt(parts[0] || '0', 10);
+							var frac = (parts[1] || '').substring(0, 8);
+							while (frac.length < 8) frac += '0';
+							outputValue = whole * 100000000 + parseInt(frac, 10);
 						}
 						if (!isSpent) {
 							data.push({
@@ -1568,7 +1577,7 @@
 								'vout': (typeof output.n !== 'undefined') ? output.n : index,
 								'value': outputValue,
 								'script_pub_key_hex': (output.scriptPubKey && output.scriptPubKey.hex) ? output.scriptPubKey.hex : (output.scriptpubkey || output.script || ''),
-								'address': (output.scriptPubKey && output.scriptPubKey.addresses && output.scriptPubKey.addresses[0]) ? output.scriptPubKey.addresses[0] : (output.scriptpubkey_address || output.address || ''),
+								'address': (output.scriptPubKey && output.scriptPubKey.addresses && output.scriptPubKey.addresses[0]) ? output.scriptPubKey.addresses[0] : ((output.scriptPubKey && output.scriptPubKey.address) ? output.scriptPubKey.address : (output.scriptpubkey_address || output.address || '')),
 								'confirmations': txData.confirmations || (txData.status && txData.status.confirmed ? 1 : 0),
 								'raw': output
 							});

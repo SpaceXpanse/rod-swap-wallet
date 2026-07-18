@@ -50,6 +50,27 @@
 			toSave.relays = toSave.relays.slice();
 		}
 		localStorage.setItem(CFG_KEY, JSON.stringify(toSave));
+		engine.applyApiConfig(toSave);
+	};
+	/* Propagate configured API base URLs into the coinjs network profiles.
+	   Without this, the OTC Settings ROD/LTC API fields were saved but every
+	   actual chain call (listUnspent/broadcast/getTransaction/addressBalance)
+	   kept using the compile-time defaults in coinjs.networks. */
+	engine.applyApiConfig = function (cfg) {
+		var c = cfg || engine.loadConfig();
+		try {
+			var rod = $.trim(c.rodApiUrl || '');
+			if (rod) {
+				rod = rod.replace(/\/+$/, '');
+				coinjs.networks.ROD.apiBase = rod;
+				coinjs.rodApi = rod;
+			}
+			var ltc = $.trim(c.ltcApiUrl || '');
+			if (ltc) {
+				coinjs.networks.LTC.apiBase = ltc.replace(/\/+$/, '');
+			}
+		} catch (e) {}
+		return c;
 	};
 
 	/* ============ Wallet bridge ============ */
@@ -69,11 +90,34 @@
 		if (!wif) throw new Error('Wallet WIF is required to derive swap account');
 		var decoded = coinjs.wif2privkey(wif);
 		if (!decoded || !decoded.privkey) throw new Error('Invalid wallet WIF');
-		var master = coinjs.hd().master('rod-otc-swap|' + decoded.privkey);
+		/* Pin derivation to ROD HD version bytes: the async balance checks
+		   temporarily switch the global network, and an unpinned derive that
+		   lands in that window emits an Ltub-prefixed xpub that later fails
+		   string comparison against a ROD-prefixed one for the same key. */
+		var master = CHAINS.withChain('ROD', function () {
+			return coinjs.hd().master('rod-otc-swap|' + decoded.privkey);
+		});
 		if (!master || !master.privkey || !master.pubkey) {
 			throw new Error('HD master derivation failed');
 		}
 		return master;
+	};
+
+	/* Version-agnostic BIP32 key identity: strips the 4 network version bytes
+	   and compares depth/fingerprint/index/chaincode/key material only, so a
+	   ROD-encoded and an LTC-encoded xpub of the SAME key compare equal. */
+	engine.xpubKeyMaterial = function (extendedKey) {
+		try {
+			var decoded = coinjs.base58decode(extendedKey);
+			if (!decoded || decoded.length !== 82) return '';
+			return Crypto.util.bytesToHex(decoded.slice(4, 78));
+		} catch (e) { return ''; }
+	};
+	engine.sameExtendedKey = function (a, b) {
+		if (!a || !b) return false;
+		if (a === b) return true;
+		var ma = engine.xpubKeyMaterial(a), mb = engine.xpubKeyMaterial(b);
+		return !!ma && ma === mb;
 	};
 
 	/* ============ API access ============ */
@@ -480,6 +524,11 @@
 			}
 		}
 		var ev = SWAP.createEnvelopeForSession(sess, type, payload, sess.localNostrPubkey, nostrPrivateKey);
+		/* Mark our own event as seen so relay echoes of it are never processed
+		   as counterparty messages (a self-echo of swap_*_normal_signature used
+		   to overwrite remote* signature slots with our OWN signature, which
+		   assembled an invalid 2-of-2 scriptSig at claim time). */
+		if (ev && ev.id) seen[ev.id] = true;
 		try { SWAP.addMessage(sess.swapId, ev); } catch (addError) { debugRelay('local message store skipped for ' + type + ': ' + (addError.message || addError)); }
 		sess.messages = sess.messages || [];
 		sess.messages.push(ev);
@@ -558,11 +607,24 @@
 	function scriptForAddress(address) {
 		return Crypto.util.bytesToHex(coinjs.script().spendToScript(address).buffer);
 	}
+	/* UTXO/evidence values are ALWAYS satoshi integers: esplora returns sats
+	   and the ROD /unspent endpoint returns sats (the wallet UI divides by
+	   1e8). Only decimal strings containing '.' are coin-denominated. The old
+	   ">21000000 ? sats : coins" heuristic misread every LTC value below
+	   0.21 LTC (21,000,000 sats) as coins and inflated it 1e8-fold, which
+	   broke LTC UTXO selection, funding verification and claim amounts. */
 	function normalizeAmountSats(value) {
 		if (typeof value === 'number') {
-			return value > 21000000 ? Math.round(value) : Math.round(value * 100000000);
+			if (!isFinite(value) || value < 0) throw new Error('Invalid satoshi amount: ' + value);
+			return Math.round(value);
 		}
-		return CHAINS.decimalToSats(value);
+		var text = String(value == null ? '' : value);
+		if (text.indexOf('.') !== -1) {
+			return CHAINS.decimalToSats(text);
+		}
+		var parsed = parseInt(text, 10);
+		if (!isFinite(parsed) || parsed < 0) throw new Error('Invalid satoshi amount: ' + text);
+		return parsed;
 	}
 	engine.listUnspent = function (cc, address) {
 		return withChain(cc, function () {
@@ -583,46 +645,126 @@
 		var expectedSats = CHAINS.decimalToSats(expectedAmount);
 		return withChain(cc, function () {
 			var expectedScript = scriptForAddress(expectedAddress);
-			return engine.getTransaction(cc, txid).then(function (response) {
-				var outputs = response.data || [];
+			/* Both the esplora and ROD /transaction/ endpoints return
+			   satoshi-denominated integer values.  The ROD API is NOT
+			   standard Bitcoin Core — it returns satoshis in /balance/,
+			   /unspent/ AND /transaction/ (confirmed by live API probe
+			   2026-07-18).  Only a decimal-string value (containing '.')
+			   is treated as coin-denominated. */
+			/* Use getTransactionRaw to get ALL outputs, not just unspent.
+			   getTransaction filters with !isSpent, which can hide a P2SH
+			   funding output if the API reports a spurious spent flag. */
+			return engine.getTransactionRaw(cc, txid).then(function (txData) {
+				try {
+				var outputs = txData.vout || [];
 				for (var i = 0; i < outputs.length; i++) {
 					var output = outputs[i];
-					var outputSats = normalizeAmountSats(output.value);
-					if ((output.address === expectedAddress || output.script_pub_key_hex === expectedScript) && outputSats === expectedSats) {
+					var vout = (typeof output.n !== 'undefined') ? output.n : i;
+					var rawVal = output.value;
+					var outputSats;
+					if (typeof rawVal === 'number') {
+						outputSats = Math.round(rawVal);          // always sats
+					} else {
+						outputSats = normalizeAmountSats(rawVal);  // handles '.' decimals
+					}
+					/* Address: ROD API uses scriptPubKey.address (singular);
+					   some Core versions use scriptPubKey.addresses[] (array) */
+					var spk = output.scriptPubKey || {};
+					var outAddr = (spk.addresses && spk.addresses[0])
+						? spk.addresses[0]
+						: (spk.address || output.scriptpubkey_address || output.address || '');
+					var outScript = (output.scriptPubKey && output.scriptPubKey.hex)
+						? output.scriptPubKey.hex
+						: (output.scriptpubkey || output.script || '');
+					/* Match by address OR script, with 1-sat tolerance for float rounding */
+					var addrMatch = outAddr === expectedAddress;
+					var scriptMatch = outScript && expectedScript && outScript === expectedScript;
+					var valueMatch = Math.abs(outputSats - expectedSats) <= 1;
+					if ((addrMatch || scriptMatch) && valueMatch) {
 						return {
-							chainCode: cc,
-							txid: txid,
-							vout: output.vout,
-							amount: CHAINS.satsToDecimal(outputSats),
-							value: outputSats,
-							address: expectedAddress,
-							scriptPubKey: output.script_pub_key_hex,
-							confirmations: output.confirmations || 0,
+							chainCode: cc, txid: txid, vout: vout,
+							amount: CHAINS.satsToDecimal(outputSats), value: outputSats,
+							address: expectedAddress, scriptPubKey: outScript,
+							confirmations: txData.confirmations || (txData.status && txData.status.confirmed ? 1 : 0),
 							verifiedAt: new Date().toISOString()
 						};
 					}
 				}
-				throw new Error(cc + ' funding output not found for ' + expectedAddress + ' amount ' + expectedAmount);
+				throw new Error(cc + ' funding output not found for ' + expectedAddress + ' amount ' + expectedAmount + ' (checked ' + outputs.length + ' vouts)');
+				} catch (verifyError) {
+					return $.Deferred().reject(verifyError).promise();
+				}
 			});
 		});
+	};
+	/* Raw transaction data without the !isSpent filter */
+	engine.getTransactionRaw = function (cc, txid) {
+		return withChain(cc, function () {
+			var d = $.Deferred();
+			var network = coinjs.getNetwork();
+			var url = (network.apiType === 'esplora')
+				? network.apiBase + '/tx/' + encodeURIComponent(txid)
+				: (network.apiBase || coinjs.rodApi) + '/transaction/' + encodeURIComponent(txid);
+			coinjs.ajax(url, function (response) {
+				try {
+					var parsed = JSON.parse(response);
+					if (parsed && parsed.error) {
+						d.reject((parsed.error.message || parsed.error) || 'Transaction lookup failed');
+						return;
+					}
+					var txData = (parsed && parsed.result) ? parsed.result : parsed;
+					d.resolve(txData);
+				} catch (e) {
+					d.reject('Invalid transaction response for ' + txid);
+				}
+			}, 'GET');
+			return d.promise();
+		});
+	};
+	/* Minimum fee rates in sats per estimated byte. Litecoin Core relays at
+	   0.00001 LTC/kB (1 lit/vB); 2 lit/vB keeps size-grown funding txs safely
+	   above the floor. ROD keeps the caller-provided fee untouched (0 rate). */
+	engine.FEE_RATE_SATS_PER_BYTE = { LTC: 2, ROD: 0 };
+	engine.estimateP2pkhTxBytes = function (inputCount, outputCount) {
+		/* ~148 B per P2PKH input, ~34 B per output, ~10 B overhead */
+		return 10 + (inputCount * 148) + (outputCount * 34);
 	};
 	engine.buildFundingTx = function (cc, sourceWif, destinationAddress, amountDecimal, feeDecimal) {
 		var wallet = CHAINS.getWalletMaterialForChain(sourceWif, cc);
 		var amountSats = CHAINS.decimalToSats(amountDecimal);
-		var feeSats = CHAINS.decimalToSats(feeDecimal || '0.00001000');
+		var baseFeeSats = CHAINS.decimalToSats(feeDecimal || '0.00001000');
 		return engine.listUnspent(cc, wallet.address).then(function (response) {
+			try {
 			return withChain(cc, function () {
-				var tx = coinjs.transaction();
-				var selected = [], total = 0, utxos = response.data || [];
-				for (var i = 0; i < utxos.length && total < amountSats + feeSats; i++) {
-					var utxo = utxos[i];
-					var value = normalizeAmountSats(utxo.value);
-					if (!utxo.transaction_hash || utxo.vout == null || value <= 0) continue;
-					tx.addinput(utxo.transaction_hash, utxo.vout, utxo.script_pub_key_hex || '', 0xffffffff);
-					selected.push({ txid: utxo.transaction_hash, vout: utxo.vout, value: value });
-					total += value;
+				var utxos = response.data || [];
+				var feeRate = engine.FEE_RATE_SATS_PER_BYTE[cc] || 0;
+				function selectUtxos(feeSats) {
+					var picked = [], sum = 0;
+					for (var i = 0; i < utxos.length && sum < amountSats + feeSats; i++) {
+						var utxo = utxos[i];
+						var value = normalizeAmountSats(utxo.value);
+						if (!utxo.transaction_hash || utxo.vout == null || value <= 0) continue;
+						picked.push({ txid: utxo.transaction_hash, vout: utxo.vout, value: value, script: utxo.script_pub_key_hex || '' });
+						sum += value;
+					}
+					return { selected: picked, total: sum };
 				}
+				/* Iterate: a bigger fee can need more inputs, which grows the
+				   tx and can require a bigger fee again. Converges fast. */
+				var feeSats = baseFeeSats, selection = selectUtxos(feeSats);
+				for (var pass = 0; pass < 5; pass++) {
+					var estBytes = engine.estimateP2pkhTxBytes(Math.max(selection.selected.length, 1), 2);
+					var minFee = Math.max(baseFeeSats, Math.ceil(estBytes * feeRate));
+					if (minFee <= feeSats) break;
+					feeSats = minFee;
+					selection = selectUtxos(feeSats);
+				}
+				var selected = selection.selected, total = selection.total;
 				if (total < amountSats + feeSats) throw new Error('Insufficient ' + cc + ' UTXOs: need ' + CHAINS.satsToDecimal(amountSats + feeSats) + ', selected ' + CHAINS.satsToDecimal(total));
+				var tx = coinjs.transaction();
+				for (var s = 0; s < selected.length; s++) {
+					tx.addinput(selected[s].txid, selected[s].vout, selected[s].script, 0xffffffff);
+				}
 				tx.addoutput(destinationAddress, CHAINS.satsToDecimal(amountSats));
 				var change = total - amountSats - feeSats;
 				if (change > 546) tx.addoutput(wallet.address, CHAINS.satsToDecimal(change));
@@ -630,11 +772,23 @@
 				var txhex = tx.serialize();
 				return { chainCode: cc, txhex: txhex, txid: txidFromHex(txhex), sourceAddress: wallet.address, destinationAddress: destinationAddress, amount: CHAINS.satsToDecimal(amountSats), fee: CHAINS.satsToDecimal(feeSats), selectedUtxos: selected, change: CHAINS.satsToDecimal(change > 0 ? change : 0) };
 			});
+			} catch (buildError) {
+				/* jQuery 1.9 does not convert exceptions in .then callbacks into
+				   rejections — without this, a failed build (e.g. insufficient
+				   LTC UTXOs) escapes uncaught, .fail() never runs and the
+				   fundLtc automation flag stays stuck forever. */
+				return $.Deferred().reject(buildError).promise();
+			}
 		});
 	};
 	engine.buildClaimTxFromFunding = function (cc, fundingEvidence, redeemScript, destinationAddress, feeDecimal) {
 		return withChain(cc, function () {
-			var amountSats = normalizeAmountSats(fundingEvidence.value || fundingEvidence.amount);
+			/* Verified funding evidence stores .value in satoshis; broadcast-only
+			   evidence carries the decimal .amount string. Both parties MUST
+			   resolve the same satoshi amount or their claim sighashes diverge. */
+			var amountSats = (fundingEvidence.value != null)
+				? normalizeAmountSats(fundingEvidence.value)
+				: CHAINS.decimalToSats(String(fundingEvidence.amount));
 			var feeSats = CHAINS.decimalToSats(feeDecimal || '0.00001000');
 			if (amountSats <= feeSats) throw new Error('Claim amount does not cover fee');
 			var tx = coinjs.transaction();
@@ -819,4 +973,8 @@
 		page(start);
 		return d.promise();
 	};
+
+	/* Apply any persisted API configuration as soon as the engine loads so
+	   coinjs network calls use the user-configured endpoints from the start. */
+	engine.applyApiConfig(engine.loadConfig());
 })();

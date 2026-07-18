@@ -6,9 +6,21 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
 
 ## [Unreleased]
 
+### Fixed (2026-07-18 — LTC tx creation/validation & swap workflow hardening)
+- **Satoshi/coin unit handling (critical, LTC-breaking):** [`js/otc-engine.js`](js/otc-engine.js) treated any numeric amount ≤ 21,000,000 as coin-denominated and multiplied by 1e8. Esplora (litecoinspace.org) returns satoshis, so every LTC UTXO/output below 0.21 LTC was inflated 1e8-fold — LTC funding construction produced `bad-txns-in-belowout` transactions, funding verification reported "output not found", and claim amounts were astronomically wrong. Units are now explicit: UTXO and evidence values are always satoshis; `findFundingOutput()` decides by `apiType` (esplora = sats, ROD `/transaction` = Core-style coin floats); `buildClaimTxFromFunding()` prefers satoshi `value` evidence over the decimal `amount` string.
+- **Nostr self-echo overwrote counterparty signatures (claim-breaking):** relays replay a client's own events (always after a reload, when the in-memory dedup cache is empty). The `swap_*_normal_signature` handlers stored the echoed local signature in the `remote*` slots, assembling a 2-of-2 scriptSig with the same signature twice — guaranteed `OP_CHECKMULTISIG` failure at broadcast. Own event IDs are now marked seen at publish time in `publishSwapMessage()`, and all signature/claim/complete handlers ignore events authored by the local Nostr pubkey.
+- **Local CHECKMULTISIG pre-broadcast verification:** `buildClaim()` now verifies both claim signatures against the redeem-script pubkeys (in order) before broadcasting, and clears a stored invalid counterparty signature instead of broadcasting a transaction the network must reject.
+- **Configured API endpoints were ignored:** the OTC Settings ROD/LTC API URLs were saved but never propagated to `coinjs.networks`, so all real chain calls (balance/UTXO/tx/broadcast) kept using compile-time defaults. `engine.applyApiConfig()` now applies them at engine load and on save.
+- **LTC funding fee floor:** the fixed 1000-litoshi funding fee sat at Litecoin's relay floor once the tx grew past ~2 inputs. `buildFundingTx()` now estimates size and enforces ≥ 2 lit/byte (never lowering a caller-provided fee); ROD fees are unchanged.
+- **Swap liveness:** each side now self-verifies its own funding output (Alice/ROD, Bob/LTC) instead of waiting for the counterparty's verified-evidence message, and a 30-second automation tick re-drives in-flight sessions, so one failed API call or missed relay message no longer strands a swap. Bob additionally funds LTC only after locally verifying the ROD funding output (`verifiedLocally` flag; remote evidence can no longer masquerade as local verification).
+- **CSP blocked all Nostr relays:** `connect-src` in [`_headers`](_headers) had no `wss:` entry, so the deployed site could never open a relay WebSocket. Added `wss:`.
+- **Service worker never installed:** [`sw.js`](sw.js) `cache.addAll()` referenced the removed `otc-test.html` (any 404 rejects the whole install) and omitted `js/otc-engine.js`/`js/otc-app-ui.js`. Asset list fixed, cache bumped to `v2.2.1-beta`.
+
+### Verification (2026-07-18)
+- End-to-end proof harness (Playwright, two real browser contexts as Alice/Bob, local NIP-01 relay, mock ROD API + mock esplora that fully validate every broadcast transaction with independent bitcoinjs-lib sighashes + noble secp256k1): 24/24 checks pass, including a 0.05 LTC swap (below the old 0.21 LTC unit-bug threshold), 2-of-2 P2SH CHECKMULTISIG claim validation on both chains, mid-swap page-reload resilience, and both sessions reaching `COMPLETE`. Regression run against the pre-fix code reproduces the LTC failure (`bad-txns-in-belowout (20000000 < 1999999999999000)`).
+
 ### Documentation
 - Carbon Memory was refreshed after OTC codebase analysis; volatile memory now records the current OTC integration surface, indexed-source refresh inputs, and follow-up verification for the missing [`otc-test.html`](otc-test.html) reference.
-- Carbon Memory was refreshed again after OTC negotiation-path review; local and durable docs now track swap-completion blockers around unreachable [`tryRecover()`](js/otc-app-ui.js:1507), funding-evidence overwrite risk in [`js/otc-app-ui.js`](js/otc-app-ui.js), and one-shot claim-signature publishing in [`shareClaimSignature()`](js/otc-app-ui.js:990).
 
 ### Added
 - Browser OTC runtime implementation:

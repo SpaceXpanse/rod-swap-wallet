@@ -106,6 +106,8 @@ $(function () {
 		'<input id="nsPeer" class="form-control" placeholder="bob.rod or address" autocomplete="off" value="">',
 		'<label>Counterparty swap xpub <small class="text-muted">(only auto-filled when you Take an order on Dashboard)</small></label>',
 		'<input id="nsPeerXpub" class="form-control" placeholder="xpub… / Ltub…" autocomplete="off" value="">',
+		'<label>Counterparty payout address <small class="text-muted">(buyer ROD address when you sell, seller LTC address when you buy)</small></label>',
+		'<input id="nsPeerPayoutAddr" class="form-control" placeholder="Counterparty settlement address" autocomplete="off" value="">',
 		'<div style="margin-top:14px">',
 		'<button class="btn btn-default" id="nsCreateOrder" type="button">Create order</button> ',
 		'<button class="btn btn-primary" id="nsCreate" type="button">Create &amp; start swap</button>',
@@ -390,6 +392,7 @@ $(function () {
 		$('#nsLtc').val($b.data('ltc'));
 		$('#nsPeer').val($b.data('peer') || '');
 		$('#nsPeerXpub').val($b.data('xpub') || '');
+		$('#nsPeerPayoutAddr').val($b.data('side') === 'bid' ? ($b.data('buyerRodPayout') || '') : ($b.data('sellerLtcPayout') || ''));
 		if ($b.data('release')) $('#nsRelease').val($b.data('release'));
 		/* Taking an ask (sell) → you are buyer (bob); taking a bid → you are seller (alice) */
 		$('#nsRole').val($b.data('side') === 'bid' ? 'alice' : 'bob');
@@ -632,6 +635,7 @@ $(function () {
 	function clearCounterpartyFields() {
 		$('#nsPeer').val('');
 		$('#nsPeerXpub').val('');
+		$('#nsPeerPayoutAddr').val('');
 		nsPrefillFromOrder = false;
 		updateNsModeHint();
 	}
@@ -639,15 +643,16 @@ $(function () {
 	function updateNsModeHint() {
 		var peer = $.trim($('#nsPeer').val());
 		var xpub = $.trim($('#nsPeerXpub').val());
-		if (peer && xpub) {
+		var payoutAddress = $.trim($('#nsPeerPayoutAddr').val());
+		if (peer && xpub && payoutAddress) {
 			$('#nsModeHint').html(nsPrefillFromOrder
 				? 'Mode: <b>start swap</b> (counterparty loaded from Dashboard order).'
 				: 'Mode: <b>start swap</b> (counterparty entered manually).');
 		} else {
-			$('#nsModeHint').html('Mode: <b>create order</b> — counterparty left empty. Use <b>Create order</b>, or Take an order on the Dashboard to fill counterparty.');
+			$('#nsModeHint').html('Mode: <b>create order</b> — counterparty fields incomplete. Use <b>Create order</b>, or Take an order on the Dashboard to fill counterparty and payout details.');
 		}
 	}
-	$('#nsPeer, #nsPeerXpub').on('input change', updateNsModeHint);
+	$('#nsPeer, #nsPeerXpub, #nsPeerPayoutAddr').on('input change', updateNsModeHint);
 
 	function decimalToBaseUnits(value) {
 		var text = $.trim(value == null ? '' : String(value));
@@ -884,9 +889,14 @@ $(function () {
 		return chainCode === 'ROD' ? session.terms.rodFunding : session.terms.ltcFunding;
 	}
 
+	function payoutDestinationLabel(chainCode) {
+		return chainCode === 'ROD' ? 'buyer ROD wallet address' : 'seller LTC wallet address';
+	}
+
 	function claimDestination(session, chainCode) {
-		var pubkey = chainCode === 'LTC' ? session.terms.aliceChildPubKey : session.terms.bobChildPubKey;
-		return CHAINS.publicKeyToAddress(chainCode, pubkey, 'legacy');
+		var address = chainCode === 'LTC' ? session.terms.sellerLtcPayoutAddress : session.terms.buyerRodPayoutAddress;
+		if (!address) throw new Error('Missing ' + payoutDestinationLabel(chainCode) + ' in swap terms');
+		return address;
 	}
 
 	function requireWalletWif() {
@@ -1096,7 +1106,9 @@ $(function () {
 		var messageType = chainCode === 'LTC' ? 'swap_ltc_normal_signature' : 'swap_rod_normal_signature';
 		var funding = session.execution && session.execution[fundingKey];
 		if (!funding || funding.vout == null || session[localKey]) return false;
-		var tx = ENGINE.buildClaimTxFromFunding(chainCode, funding, fundingTarget(session, chainCode).redeemScript, claimDestination(session, chainCode), claimFee(chainCode));
+		var destinationAddress = claimDestination(session, chainCode);
+		slog(session.swapId, '→ Preparing ' + chainCode + ' claim signature for ' + payoutDestinationLabel(chainCode) + ' ' + destinationAddress);
+		var tx = ENGINE.buildClaimTxFromFunding(chainCode, funding, fundingTarget(session, chainCode).redeemScript, destinationAddress, claimFee(chainCode));
 		session[localKey] = ENGINE.signClaimTx(chainCode, tx, getLocalChildWif(session, chainCode));
 		ENGINE.saveLive(session);
 		publish(session, messageType, { chainCode: chainCode, signature: session[localKey], txid: funding.txid, vout: funding.vout });
@@ -1139,7 +1151,9 @@ $(function () {
 		if (!funding || funding.vout == null) throw new Error(chainCode + ' funding evidence is missing');
 		slog(session.swapId, '→ Building ' + chainCode + ' claim from funding tx ' + short(funding.txid || '') + ':' + funding.vout);
 		var redeemScript = fundingTarget(session, chainCode).redeemScript;
-		var tx = ENGINE.buildClaimTxFromFunding(chainCode, funding, redeemScript, claimDestination(session, chainCode), claimFee(chainCode));
+		var destinationAddress = claimDestination(session, chainCode);
+		slog(session.swapId, '→ ' + chainCode + ' claim destination: ' + destinationAddress + ' (' + payoutDestinationLabel(chainCode) + ')');
+		var tx = ENGINE.buildClaimTxFromFunding(chainCode, funding, redeemScript, destinationAddress, claimFee(chainCode));
 		var localSig = buildLocalSignature(session, chainCode, tx);
 		var remoteSig = buildRemoteSignature(session, chainCode, tx);
 		if (!remoteSig) {
@@ -1335,6 +1349,8 @@ $(function () {
 			want: ltcAmount,
 			sellerSwapXpub: role === 'alice' ? swapAcct.xpub : '',
 			buyerSwapXpub: role === 'bob' ? swapAcct.xpub : '',
+			sellerLtcPayoutAddress: role === 'alice' ? getWalletAddressForChain(walletId.wif, 'LTC') : '',
+			buyerRodPayoutAddress: role === 'bob' ? getWalletAddressForChain(walletId.wif, 'ROD') : '',
 			releaseRodHeight: releaseRodHeight,
 			orderId: orderId
 		};
@@ -1416,9 +1432,10 @@ $(function () {
 		try {
 			if (!checkWallet()) throw new Error('Open your wallet first');
 			if (!swapAcct || !swapAcct.xprv || !swapAcct.xpub) throw new Error('Swap account not ready — reopen wallet');
-			var role = $('#nsRole').val(), peer = $.trim($('#nsPeer').val()), peerXpub = $.trim($('#nsPeerXpub').val());
+			var role = $('#nsRole').val(), peer = $.trim($('#nsPeer').val()), peerXpub = $.trim($('#nsPeerXpub').val()), peerPayoutAddress = $.trim($('#nsPeerPayoutAddr').val());
 			if (!peer) throw new Error('Enter counterparty identity, or Take an order on the Dashboard first');
 			if (!peerXpub) throw new Error('Enter counterparty swap xpub, or Take an order on the Dashboard first');
+			if (!peerPayoutAddress) throw new Error('Enter counterparty payout address, or Take an order on the Dashboard first');
 			if (peerXpub === swapAcct.xpub) throw new Error('Counterparty xpub must differ from your swap xpub');
 
 			/* Dust-limit validation: both the funding output AND the claim
@@ -1441,13 +1458,19 @@ $(function () {
 				var myAddr = walletId.address;
 				var orderId = (role === 'alice' ? myAddr : peer) + '/otc-' + Date.now();
 				var swapId = SWAP.swapIdFromOrder(orderId, '1', role === 'alice' ? peer : myAddr);
+				var localRodAddress = getWalletAddressForChain(walletId.wif, 'ROD');
+				var localLtcAddress = getWalletAddressForChain(walletId.wif, 'LTC');
+				var sellerLtcPayoutAddress = role === 'alice' ? localLtcAddress : peerPayoutAddress;
+				var buyerRodPayoutAddress = role === 'bob' ? localRodAddress : peerPayoutAddress;
 
 				var session = SWAP.createOfferSession({
 					role: role, swapId: swapId, orderId: orderId,
 					rodAmount: $('#nsRod').val(), ltcAmount: $('#nsLtc').val(),
 					releaseRodHeight: $('#nsRelease').val(),
 					sellerSwapAccountKey: role === 'alice' ? swapAcct.xprv : peerXpub,
-					buyerSwapAccountKey: role === 'alice' ? peerXpub : swapAcct.xprv
+					buyerSwapAccountKey: role === 'alice' ? peerXpub : swapAcct.xprv,
+					sellerLtcPayoutAddress: sellerLtcPayoutAddress,
+					buyerRodPayoutAddress: buyerRodPayoutAddress
 				});
 
 				session.readiness = session.readiness || {};
@@ -1480,6 +1503,8 @@ $(function () {
 					buyer: role === 'bob' ? myAddr : peer,
 					pair: 'ROD/LTC', give: session.terms.rodAmount, want: session.terms.ltcAmount,
 					sellerSwapXpub: session.sellerSwapXpub, buyerSwapXpub: session.buyerSwapXpub,
+					sellerLtcPayoutAddress: session.terms.sellerLtcPayoutAddress,
+					buyerRodPayoutAddress: session.terms.buyerRodPayoutAddress,
 					releaseRodHeight: session.terms.releaseRodHeight,
 					termsHash: session.terms.termsHash
 				}, null, 2));
@@ -1540,7 +1565,9 @@ $(function () {
 				ltcAmount: terms.ltcAmount,
 				releaseRodHeight: terms.releaseRodHeight,
 				sellerSwapAccountKey: role === 'alice' ? swapAcct.xprv : terms.sellerSwapXpub,
-				buyerSwapAccountKey: role === 'bob' ? swapAcct.xprv : terms.buyerSwapXpub
+				buyerSwapAccountKey: role === 'bob' ? swapAcct.xprv : terms.buyerSwapXpub,
+				sellerLtcPayoutAddress: terms.sellerLtcPayoutAddress,
+				buyerRodPayoutAddress: terms.buyerRodPayoutAddress
 			});
 			if (!session.terms || session.terms.termsHash !== terms.termsHash) {
 				var expectedLocalPubkey = role === 'alice' ? terms.aliceChildPubKey : terms.bobChildPubKey;

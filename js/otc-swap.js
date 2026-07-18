@@ -151,13 +151,15 @@
 			childIndex: childIndex,
 			releaseRodHeight: parseInt(input.releaseRodHeight, 10),
 			aliceChildPubKey: alicePublicKey,
-			bobChildPubKey: bobPublicKey
+			bobChildPubKey: bobPublicKey,
+			sellerLtcPayoutAddress: input.sellerLtcPayoutAddress,
+			buyerRodPayoutAddress: input.buyerRodPayoutAddress
 		};
 		canonicalTerms.termsHash = sha256Hex(stableStringify(canonicalTerms));
 		canonicalTerms.rodFunding = CHAINS.planFunding('ROD', [alicePublicKey, bobPublicKey], 2, canonicalTerms.rodAmount);
 		canonicalTerms.ltcFunding = CHAINS.planFunding('LTC', [alicePublicKey, bobPublicKey], 2, canonicalTerms.ltcAmount);
-		canonicalTerms.rodClaim = CHAINS.planClaim('ROD', canonicalTerms.rodFunding, CHAINS.publicKeyToAddress('ROD', bobPublicKey, 'legacy'), canonicalTerms.rodAmount, '0.00001000');
-		canonicalTerms.ltcClaim = CHAINS.planClaim('LTC', canonicalTerms.ltcFunding, CHAINS.publicKeyToAddress('LTC', alicePublicKey, 'legacy'), canonicalTerms.ltcAmount, '0.00001000');
+		canonicalTerms.rodClaim = CHAINS.planClaim('ROD', canonicalTerms.rodFunding, canonicalTerms.buyerRodPayoutAddress, canonicalTerms.rodAmount, '0.00001000');
+		canonicalTerms.ltcClaim = CHAINS.planClaim('LTC', canonicalTerms.ltcFunding, canonicalTerms.sellerLtcPayoutAddress, canonicalTerms.ltcAmount, '0.00001000');
 		return canonicalTerms;
 	};
 
@@ -237,7 +239,9 @@
 			childIndex: sellerSwapKeys.childIndex,
 			releaseRodHeight: input.releaseRodHeight,
 			aliceChildPubKey: sellerSwapKeys.publicKey,
-			bobChildPubKey: buyerSwapKeys.publicKey
+			bobChildPubKey: buyerSwapKeys.publicKey,
+			sellerLtcPayoutAddress: input.sellerLtcPayoutAddress,
+			buyerRodPayoutAddress: input.buyerRodPayoutAddress
 		});
 		var session = {
 			swapId: input.swapId,
@@ -380,7 +384,9 @@
 			childIndex: childIndex,
 			releaseRodHeight: 1500000,
 			aliceChildPubKey: aliceKeys.publicKey,
-			bobChildPubKey: bobKeys.publicKey
+			bobChildPubKey: bobKeys.publicKey,
+			sellerLtcPayoutAddress: CHAINS.publicKeyToAddress('LTC', aliceKeys.publicKey, 'legacy'),
+			buyerRodPayoutAddress: CHAINS.publicKeyToAddress('ROD', bobKeys.publicKey, 'legacy')
 		});
 		return {
 			aliceAccount: aliceAccount,
@@ -405,7 +411,9 @@
 			childIndex: fixtures.childIndex,
 			releaseRodHeight: 1500000,
 			aliceChildPubKey: fixtures.aliceKeys.publicKey,
-			bobChildPubKey: fixtures.bobKeys.publicKey
+			bobChildPubKey: fixtures.bobKeys.publicKey,
+			sellerLtcPayoutAddress: fixtures.terms.sellerLtcPayoutAddress,
+			buyerRodPayoutAddress: fixtures.terms.buyerRodPayoutAddress
 		});
 		var nameValidation = false;
 		try {

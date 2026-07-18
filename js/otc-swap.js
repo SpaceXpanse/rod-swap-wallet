@@ -287,7 +287,7 @@
 		return session;
 	};
 
-	swapModule.createEnvelopeForSession = function(session, type, payload, pubkey){
+	swapModule.createEnvelopeForSession = function(session, type, payload, pubkey, privateKeyHex){
 		var previousMessage = session.messages && session.messages.length ? session.messages[session.messages.length - 1] : null;
 		return NOSTR.createEnvelope({
 			swapId: session.swapId,
@@ -295,7 +295,8 @@
 			sequence: previousMessage ? (JSON.parse(previousMessage.content).sequence + 1) : 1,
 			previousEventId: previousMessage ? previousMessage.id : '',
 			payload: payload,
-			pubkey: pubkey || (session.role + '-manual-peer')
+			pubkey: pubkey,
+			privateKeyHex: privateKeyHex
 		});
 	};
 

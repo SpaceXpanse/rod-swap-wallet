@@ -344,19 +344,50 @@
 		this.urls = urls || defaults.relays.slice();
 		this.ws = {};
 		this.h = {};
+		this.outbox = [];
 		this.n = 0;
 		this.onStatus = null;
+		this.onNotice = null;
 		this.closed = false;
 	}
 	Pool.prototype.connect = function () { var s = this; this.urls.forEach(function (u) { s._open(u); }); };
+	Pool.prototype._queue = function (eventObject) {
+		if (!eventObject || !eventObject.id) return;
+		for (var i = 0; i < this.outbox.length; i++) {
+			if (this.outbox[i].id === eventObject.id) return;
+		}
+		this.outbox.push(eventObject);
+		if (this.outbox.length > 100) this.outbox = this.outbox.slice(-100);
+	};
+	Pool.prototype._flush = function (u) {
+		var w = this.ws[u];
+		if (!w || w.readyState !== 1 || !this.outbox.length) return 0;
+		var sent = 0;
+		for (var i = 0; i < this.outbox.length; i++) {
+			try { w.send(JSON.stringify(['EVENT', this.outbox[i]])); sent++; } catch (e) {}
+		}
+		return sent;
+	};
 	Pool.prototype._open = function (u) {
 		var s = this;
 		if (s.closed) return;
 		if (s.ws[u] && s.ws[u].readyState <= 1) return;
 		try {
 			var w = new WebSocket(u);
-			w.onopen = function () { if (s.closed) { try { w.close(); } catch (e0) {} return; } if (s.onStatus) s.onStatus('+', u); for (var id in s.h) if (s.h[id].f) w.send(JSON.stringify(['REQ', id, s.h[id].f])); };
-			w.onmessage = function (m) { try { var d = JSON.parse(m.data); if (d[0] === 'EVENT' && s.h[d[1]]) s.h[d[1]].cb(d[2], u); } catch (e) {} };
+			w.onopen = function () {
+				if (s.closed) { try { w.close(); } catch (e0) {} return; }
+				if (s.onStatus) s.onStatus('+', u);
+				for (var id in s.h) if (s.h[id].f) w.send(JSON.stringify(['REQ', id, s.h[id].f]));
+				var flushed = s._flush(u);
+				if (flushed && s.onNotice) s.onNotice(['LOCAL_FLUSH', flushed], u);
+			};
+			w.onmessage = function (m) {
+				try {
+					var d = JSON.parse(m.data);
+					if (d[0] === 'EVENT' && s.h[d[1]]) s.h[d[1]].cb(d[2], u);
+					else if ((d[0] === 'OK' || d[0] === 'NOTICE' || d[0] === 'AUTH') && s.onNotice) s.onNotice(d, u);
+				} catch (e) {}
+			};
 			w.onclose = function () {
 				delete s.ws[u];
 				if (s.onStatus) s.onStatus('-', u);
@@ -380,7 +411,12 @@
 		this.ws = {};
 		this.h = {};
 	};
-	Pool.prototype.pub = function (ev) { var f = JSON.stringify(['EVENT', ev]), n = 0; for (var u in this.ws) if (this.ws[u].readyState === 1) { this.ws[u].send(f); n++; } return n; };
+	Pool.prototype.pub = function (ev) {
+		this._queue(ev);
+		var f = JSON.stringify(['EVENT', ev]), n = 0;
+		for (var u in this.ws) if (this.ws[u].readyState === 1) { this.ws[u].send(f); n++; }
+		return n;
+	};
 	Pool.prototype.sub = function (filt, cb) {
 		var id = 'o' + (++this.n) + '-' + Date.now(); this.h[id] = { cb: cb, f: filt };
 		var fr = JSON.stringify(['REQ', id, filt]); for (var u in this.ws) if (this.ws[u].readyState === 1) this.ws[u].send(fr);
@@ -393,6 +429,16 @@
 	engine.pool = null;
 	engine._wantListening = false;
 	engine._listenHandler = null;
+	engine.onRelayEventDebug = null;
+	engine.onRelaySubscription = null;
+	function debugRelay(message) {
+		if (engine.onRelayEventDebug) engine.onRelayEventDebug(message);
+	}
+	function otcKinds() {
+		var primary = (NOSTR && NOSTR.OTC_EVENT_KIND) || 7340;
+		var legacy = (NOSTR && NOSTR.LEGACY_OTC_EVENT_KIND) || 33440;
+		return primary === legacy ? [primary] : [primary, legacy];
+	}
 
 	engine.stopRelays = function () {
 		if (engine.pool) {
@@ -426,24 +472,74 @@
 	var seen = {};
 	engine.onSwapMessage = null;
 	engine.publishSwapMessage = function (sess, type, payload) {
-		var ev = SWAP.createEnvelopeForSession(sess, type, payload, sess.role + '-peer');
-		SWAP.addMessage(sess.swapId, ev);
-		if (engine.pool) engine.pool.pub(ev);
+		var nostrPrivateKey = sess.localNostrPrivateKey || '';
+		if (!nostrPrivateKey) {
+			var walletIdentity = engine.getWalletIdentity();
+			if (walletIdentity && walletIdentity.wif && NOSTR.identityFromWif) {
+				nostrPrivateKey = NOSTR.identityFromWif(walletIdentity.wif).privateKeyHex;
+			}
+		}
+		var ev = SWAP.createEnvelopeForSession(sess, type, payload, sess.localNostrPubkey, nostrPrivateKey);
+		try { SWAP.addMessage(sess.swapId, ev); } catch (addError) { debugRelay('local message store skipped for ' + type + ': ' + (addError.message || addError)); }
+		sess.messages = sess.messages || [];
+		sess.messages.push(ev);
+		try { engine.saveLive(sess); } catch (saveError) { debugRelay('live message store skipped for ' + type + ': ' + (saveError.message || saveError)); }
+		var relayCount = engine.pool ? engine.pool.pub(ev) : 0;
+		if (engine.onRelayPublish) engine.onRelayPublish(ev, relayCount);
 		return ev;
 	};
+	function handleRelaySwapEvent(ev, relayUrl, source, expectedSwapId) {
+		var eventId = ev && ev.id ? ev.id : '';
+		try {
+			var env = NOSTR.validateEnvelope(ev);
+			if (expectedSwapId && env.swapId !== expectedSwapId) {
+				debugRelay('drop ' + source + ' event ' + (eventId ? eventId.slice(0, 12) + '…' : 'unknown') + ' from ' + relayUrl + ': swapId mismatch ' + env.swapId.slice(0, 12) + '…');
+				return;
+			}
+			if (seen[eventId]) {
+				debugRelay('duplicate ' + source + ' ' + env.type + ' ' + env.swapId.slice(0, 12) + '… from ' + relayUrl);
+				return;
+			}
+			seen[eventId] = true;
+			debugRelay('event ' + source + ' ' + env.type + ' ' + env.swapId.slice(0, 12) + '… kind ' + ev.kind + ' from ' + relayUrl + ' sig=' + (!!ev.sig));
+			try { SWAP.addMessage(env.swapId, ev); }
+			catch (messageError) { debugRelay('message pre-store skipped for ' + env.type + ' ' + env.swapId.slice(0, 12) + '…: ' + (messageError.message || messageError)); }
+			if (engine.onSwapMessage) engine.onSwapMessage(env, ev);
+		} catch (error) {
+			debugRelay('reject ' + source + ' event ' + (eventId ? eventId.slice(0, 12) + '…' : 'unknown') + ' from ' + relayUrl + ': ' + (error.message || error));
+		}
+	}
 	engine.startListening = function (force) {
 		if (!engine.pool) engine.startRelays();
 		engine._wantListening = true;
 		if (engine._listenHandler && !force) return;
-		engine._listenHandler = function (ev) {
-			if (seen[ev.id]) return; seen[ev.id] = true;
-			try {
-				var env = NOSTR.validateEnvelope(ev);
-				try { SWAP.addMessage(env.swapId, ev); } catch (e) {}
-				if (engine.onSwapMessage) engine.onSwapMessage(env, ev);
-			} catch (e) {}
+		engine._listenHandler = function (ev, relayUrl) {
+			handleRelaySwapEvent(ev, relayUrl || 'unknown relay', 'global', '');
 		};
-		engine.pool.sub({ kinds: [33440], limit: 500 }, engine._listenHandler);
+		var subId = engine.pool.sub({ kinds: otcKinds(), limit: 500 }, engine._listenHandler);
+		if (engine.onRelaySubscription) engine.onRelaySubscription(subId, { kinds: otcKinds(), limit: 500 }, 'global');
+	};
+
+	engine.trackSwapId = function (swapId) {
+		if (!engine.pool) engine.startRelays();
+		engine.startListening();
+		var cleanSwapId = $.trim(swapId || '');
+		if (!/^[0-9a-f]{64}$/i.test(cleanSwapId)) {
+			throw new Error('Swap ID must be a 64-character hex value');
+		}
+		engine.trackedSwapIds = engine.trackedSwapIds || {};
+		engine.trackedSwapIds[cleanSwapId] = true;
+		var dFilter = { kinds: otcKinds(), '#d': [cleanSwapId], limit: 500 };
+		var dSub = engine.pool.sub(dFilter, function (ev, relayUrl) {
+			handleRelaySwapEvent(ev, relayUrl || 'unknown relay', '#d', cleanSwapId);
+		});
+		if (engine.onRelaySubscription) engine.onRelaySubscription(dSub, dFilter, '#d');
+		var swapIdFilter = { kinds: otcKinds(), '#swapId': [cleanSwapId], limit: 500 };
+		var swapIdSub = engine.pool.sub(swapIdFilter, function (ev, relayUrl) {
+			handleRelaySwapEvent(ev, relayUrl || 'unknown relay', '#swapId', cleanSwapId);
+		});
+		if (engine.onRelaySubscription) engine.onRelaySubscription(swapIdSub, swapIdFilter, '#swapId');
+		return swapIdSub;
 	};
 
 	/* ============ Tx helpers ============ */
@@ -578,6 +674,7 @@
 		var all = engine.loadLive(), c = $.extend(true, {}, sess), pw = engine.walletPassword();
 		if (c.localChildPrivateKey && pw) { c._ep = CryptoJS.AES.encrypt(c.localChildPrivateKey, pw).toString(); delete c.localChildPrivateKey; }
 		if (c.adaptorSecret && pw) { c._ea = CryptoJS.AES.encrypt(c.adaptorSecret, pw).toString(); delete c.adaptorSecret; }
+		if (c.localNostrPrivateKey && pw) { c._en = CryptoJS.AES.encrypt(c.localNostrPrivateKey, pw).toString(); delete c.localNostrPrivateKey; }
 		all[sess.swapId] = c; localStorage.setItem(LIVE, JSON.stringify(all));
 	};
 	engine.loadLive = function () { try { return JSON.parse(localStorage.getItem(LIVE)) || {}; } catch (e) { return {}; } };
@@ -586,6 +683,7 @@
 		var pw = engine.walletPassword();
 		if (s._ep && pw) { try { s.localChildPrivateKey = CryptoJS.AES.decrypt(s._ep, pw).toString(CryptoJS.enc.Utf8); } catch (e) {} }
 		if (s._ea && pw) { try { s.adaptorSecret = CryptoJS.AES.decrypt(s._ea, pw).toString(CryptoJS.enc.Utf8); } catch (e) {} }
+		if (s._en && pw) { try { s.localNostrPrivateKey = CryptoJS.AES.decrypt(s._en, pw).toString(CryptoJS.enc.Utf8); } catch (e) {} }
 		return s;
 	};
 	engine.removeLive = function (id) { var a = engine.loadLive(); delete a[id]; localStorage.setItem(LIVE, JSON.stringify(a)); };

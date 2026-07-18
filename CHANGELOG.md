@@ -8,6 +8,7 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
 
 ### Documentation
 - Carbon Memory was refreshed after OTC codebase analysis; volatile memory now records the current OTC integration surface, indexed-source refresh inputs, and follow-up verification for the missing [`otc-test.html`](otc-test.html) reference.
+- Carbon Memory was refreshed again after OTC negotiation-path review; local and durable docs now track swap-completion blockers around unreachable [`tryRecover()`](js/otc-app-ui.js:1507), funding-evidence overwrite risk in [`js/otc-app-ui.js`](js/otc-app-ui.js), and one-shot claim-signature publishing in [`shareClaimSignature()`](js/otc-app-ui.js:990).
 
 ### Added
 - Browser OTC runtime implementation:

@@ -210,7 +210,15 @@ $(function () {
 
 	/* ============ Helpers ============ */
 	function flash(t, m) { $('#otcFlash').removeClass('hidden alert-success alert-danger alert-warning alert-info').addClass('alert-' + t).text(m); }
-	function log(m) { $('#otcLog').prepend('<div>[' + ts() + '] ' + esc(m) + '</div>'); }
+	var EVENT_LOG_LIMIT = 200;
+	function log(m) {
+		var $log = $('#otcLog');
+		$log.prepend('<div>[' + ts() + '] ' + esc(m) + '</div>');
+		var $entries = $log.children();
+		if ($entries.length > EVENT_LOG_LIMIT) {
+			$entries.slice(EVENT_LOG_LIMIT).remove();
+		}
+	}
 	var walletId = null, swapAcct = null;
 	function checkWallet() {
 		walletId = ENGINE.getWalletIdentity();
@@ -252,17 +260,43 @@ $(function () {
 	checkWallet();
 
 	/* ============ ORDERBOOK ============ */
-	var allOffers = [];
+	var allOffers = [], currentRodHeight = 0;
+	function orderCreatedAt(order) {
+		var orderId = String(order && order.orderId || '');
+		var match = orderId.match(/(\d{13})$/);
+		if (!match) return '';
+		var createdAt = new Date(parseInt(match[1], 10));
+		return isNaN(createdAt.getTime()) ? '' : createdAt.toLocaleString();
+	}
+	function isOrderExpired(order, chainHeight) {
+		var dueBlock = parseInt(order && order.releaseRodHeight, 10);
+		return !!(dueBlock && chainHeight && dueBlock <= chainHeight);
+	}
 	function refreshBook() {
 		$('#otcBookTime').text('Scanning ROD DB…');
 		$('#otcScanReport').html('<span class="text-muted">name_scan regexp <code>^d/otc-swap/</code> …</span>');
-		ENGINE.scanOtcOrdersFromDb({ regexp: ENGINE.OTC_NAME_REGEXP || '^d/otc-swap/' }).then(function (result) {
-			var offers = (result && result.offers) ? result.offers : [];
-			var reports = (result && result.reports) ? result.reports : [];
-			allOffers = offers;
+		$.when(ENGINE.scanOtcOrdersFromDb({ regexp: ENGINE.OTC_NAME_REGEXP || '^d/otc-swap/' }), ENGINE.getRodHeight()).then(function (result, height) {
+			var scanResult = result && result.offers ? result : (coinjs.isArray(result) ? result[0] : result);
+			var chainHeight = parseInt(height, 10) || 0;
+			var offers = (scanResult && scanResult.offers) ? scanResult.offers : [];
+			var reports = (scanResult && scanResult.reports) ? scanResult.reports : [];
+			var activeOffers = [];
+			var expiredCount = 0;
+			currentRodHeight = chainHeight;
+			offers.forEach(function (offer) {
+				offer._createdAt = orderCreatedAt(offer);
+				offer._dueBlock = parseInt(offer.releaseRodHeight, 10) || 0;
+				offer._isExpired = isOrderExpired(offer, chainHeight);
+				if (offer._isExpired) {
+					expiredCount++;
+					return;
+				}
+				activeOffers.push(offer);
+			});
+			allOffers = activeOffers;
 			/* Group by price for ask/bid */
 			var asks = {}, bids = {};
-			offers.forEach(function (o) {
+			activeOffers.forEach(function (o) {
 				var rod = parseFloat(o.give || o.rodAmount || 0), ltc = parseFloat(o.want || o.ltcAmount || 0);
 				if (rod <= 0 || ltc <= 0) return;
 				var price = (ltc / rod).toFixed(8);
@@ -281,22 +315,26 @@ $(function () {
 			else if (askPrices.length) mid = askPrices[0].toFixed(8);
 			else if (bidPrices.length) mid = bidPrices[0].toFixed(8);
 			$('#otcMidPrice').text(mid);
-			var scanned = (result && result.scanned != null) ? result.scanned : reports.length;
-			$('#otcBookTime').text(offers.length + ' offers · ' + scanned + ' names · ' + ts());
+			var scanned = (scanResult && scanResult.scanned != null) ? scanResult.scanned : reports.length;
+			$('#otcBookTime').text(activeOffers.length + ' active offers · ' + expiredCount + ' expired filtered · h' + chainHeight + ' · ' + ts());
 			$('#otcBookDetail').hide();
 			if (reports.length) {
+				var visibleReports = reports.filter(function (report) {
+					return !report.ok;
+				});
 				$('#otcScanReport').html(
-					'<div class="text-muted" style="margin-bottom:4px">regexp <code>^d/otc-swap/</code> · ' + scanned + ' name(s)</div>' +
-					reports.map(function (r) {
-						var color = r.ok ? '#62e6a6' : '#f0ad4e';
-						return '<div style="color:' + color + '"><b>' + esc(r.name) + '</b> — ' + esc(r.detail) + '</div>';
-					}).join('')
+					'<div class="text-muted" style="margin-bottom:4px">regexp <code>^d/otc-swap/</code> · ' + scanned + ' name(s) · current block <code>' + esc(chainHeight) + '</code> · expired filtered <code>' + esc(expiredCount) + '</code></div>' +
+					(visibleReports.length
+						? visibleReports.map(function (report) {
+							return '<div style="color:#f0ad4e"><b>' + esc(report.name) + '</b> — ' + esc(report.detail) + '</div>';
+						}).join('')
+						: '<div class="text-muted">Active orders loaded. Hidden successful raw scan rows to reduce clutter.</div>')
 				);
 			} else {
 				$('#otcScanReport').html('<span class="text-muted">No names matched <code>^d/otc-swap/</code></span>');
 			}
-		}, function (err) {
-			var msg = (err && err.message) ? err.message : (typeof err === 'string' ? err : 'Scan failed');
+		}, function (scanError) {
+			var msg = (scanError && scanError.message) ? scanError.message : (typeof scanError === 'string' ? scanError : 'Scan failed');
 			$('#otcBookTime').text('Failed · ' + ts());
 			$('#otcScanReport').html('<span style="color:#f1334a">' + esc(msg) + ' — is ROD Core RPC / proxy connected?</span>');
 			$('#otcAsks,#otcBids').html('<tr><td colspan="3" class="text-muted" style="font-size:11px">Scan failed</td></tr>');
@@ -334,7 +372,9 @@ $(function () {
 		});
 		$('#otcBookDetailTitle').text((side === 'ask' ? 'Sell' : 'Buy') + ' offers at ' + price + ' LTC/ROD');
 		$('#otcBookDetailBody').html(matching.map(function (o) {
-			return '<tr><td>' + esc(o.seller || o._name || '—') + '</td><td>' + esc(o.give || o.rodAmount) + '</td><td>' + esc(o.want || o.ltcAmount) + '</td>' +
+			var createdAt = o._createdAt ? '<div class="text-muted" style="font-size:10px">Created ' + esc(o._createdAt) + '</div>' : '';
+			var dueBlock = o._dueBlock ? '<div class="text-muted" style="font-size:10px">Due block ' + esc(o._dueBlock) + (currentRodHeight ? ' · ' + esc(o._dueBlock - currentRodHeight) + ' left' : '') + '</div>' : '';
+			return '<tr><td>' + esc(o.seller || o._name || '—') + createdAt + dueBlock + '</td><td>' + esc(o.give || o.rodAmount) + '</td><td>' + esc(o.want || o.ltcAmount) + '</td>' +
 				'<td><code style="font-size:10px">' + esc(short(o.sellerSwapXpub || o.buyerSwapXpub || '')) + '</code></td>' +
 				'<td><button class="btn btn-xs btn-primary otcTakeOffer" data-rod="' + esc(o.give || o.rodAmount) + '" data-ltc="' + esc(o.want || o.ltcAmount) + '" data-peer="' + esc(o.seller || o._name) + '" data-xpub="' + esc(o.sellerSwapXpub || o.buyerSwapXpub || '') + '" data-release="' + esc(o.releaseRodHeight || '') + '" data-side="' + esc(side) + '">Take</button></td></tr>';
 		}).join(''));
@@ -434,6 +474,7 @@ $(function () {
 		};
 		ENGINE.startListening(!!restart);
 		ENGINE.onSwapMessage = function (env, eventObject) {
+			if (!shouldProcessRelayEvent(env)) return;
 			log('← ' + env.type + ' ' + short(env.swapId));
 			autoProcess(env, eventObject);
 			refreshSwaps();
@@ -541,13 +582,14 @@ $(function () {
 	function renderExecutionButtons(session) {
 		$('.otcExecBtn').hide().prop('disabled', false);
 		$('.otcExecBtn[data-action="refresh"]').show();
+		var execution = session.execution || {};
 		if (!session.declined && !session.localAccepted && session.state !== 'COMPLETE') {
 			$('.otcExecBtn[data-action="accept-offer"]').show();
 		}
-		if (session.role === 'alice' && session.localAccepted && session.state !== 'COMPLETE') {
+		if (session.role === 'alice' && session.localAccepted && session.state !== 'COMPLETE' && !(execution.ltcClaim && execution.ltcClaim.txid)) {
 			$('.otcExecBtn[data-action="claim-ltc"]').show().prop('disabled', !ltcClaimReady(session));
 		}
-		if (session.role === 'bob' && session.localAccepted && session.state !== 'COMPLETE') {
+		if (session.role === 'bob' && session.localAccepted && session.state !== 'COMPLETE' && !(execution.rodClaim && execution.rodClaim.txid)) {
 			$('.otcExecBtn[data-action="claim-rod"]').show().prop('disabled', !rodClaimReady(session));
 		}
 	}
@@ -781,6 +823,13 @@ $(function () {
 
 	function publish(session, type, payload) {
 		if (ENGINE.pool) ENGINE.publishSwapMessage(session, type, payload || {});
+	}
+
+	function shouldProcessRelayEvent(env) {
+		var liveSessions = ENGINE.loadLive();
+		if (liveSessions[env.swapId]) return true;
+		if (ENGINE.trackedSwapIds && ENGINE.trackedSwapIds[env.swapId]) return true;
+		return env.type === 'swap_terms';
 	}
 
 	function eventPubkey(eventObject) {
@@ -1088,6 +1137,7 @@ $(function () {
 	function buildClaim(session, chainCode, fundingKey, claimKey, messageType) {
 		var funding = session.execution && session.execution[fundingKey];
 		if (!funding || funding.vout == null) throw new Error(chainCode + ' funding evidence is missing');
+		slog(session.swapId, '→ Building ' + chainCode + ' claim from funding tx ' + short(funding.txid || '') + ':' + funding.vout);
 		var redeemScript = fundingTarget(session, chainCode).redeemScript;
 		var tx = ENGINE.buildClaimTxFromFunding(chainCode, funding, redeemScript, claimDestination(session, chainCode), claimFee(chainCode));
 		var localSig = buildLocalSignature(session, chainCode, tx);
@@ -1109,11 +1159,42 @@ $(function () {
 			throw new Error(chainCode + ' claim signatures failed local verification — waiting for a valid counterparty signature');
 		}
 		ENGINE.applyMultisigSignatures(chainCode, tx, redeemScript, orderedSigs);
-		return ENGINE.broadcastTx(chainCode, tx.serialize()).then(function (response) {
-			var evidence = { chainCode: chainCode, txid: response.txid, txhex: tx.serialize(), localSignature: localSig, remoteSignature: remoteSig, completedSigHex: localSig, broadcastAt: new Date().toISOString() };
+		slog(session.swapId, '→ Broadcasting ' + chainCode + ' claim transaction');
+		var claimTxHex = tx.serialize();
+		var claimTxid = '';
+		try {
+			claimTxid = coinjs.transaction().deserialize(claimTxHex).txid ? coinjs.transaction().deserialize(claimTxHex).txid : '';
+		} catch (deserializeError) {}
+		if (!claimTxid) {
+			try {
+				var firstHash = Crypto.SHA256(Crypto.util.hexToBytes(claimTxHex), { asBytes: true });
+				claimTxid = Crypto.util.bytesToHex(Crypto.SHA256(firstHash, { asBytes: true }).reverse());
+			} catch (hashError) {}
+		}
+		function persistClaimEvidence(txid, alreadyBroadcast) {
+			var evidence = {
+				chainCode: chainCode,
+				txid: txid || claimTxid,
+				txhex: claimTxHex,
+				localSignature: localSig,
+				remoteSignature: remoteSig,
+				completedSigHex: localSig,
+				broadcastAt: new Date().toISOString()
+			};
+			if (alreadyBroadcast) evidence.alreadyInChain = true;
 			saveExecution(session, claimKey, evidence);
 			publish(session, messageType, evidence);
+			slog(session.swapId, (alreadyBroadcast ? '✓ ' + chainCode + ' claim already confirmed/broadcast earlier ' : '✓ ' + chainCode + ' claim broadcast ') + evidence.txid);
 			return evidence;
+		}
+		return ENGINE.broadcastTx(chainCode, claimTxHex).then(function (response) {
+			return persistClaimEvidence((response && response.txid) || claimTxid, false);
+		}, function (error) {
+			var message = (error && error.message) ? error.message : String(error || '');
+			if (/already in block chain|already in blockchain|already have transaction|txn-already-known|transaction already in block chain/i.test(message)) {
+				return persistClaimEvidence(claimTxid, true);
+			}
+			return $.Deferred().reject(error).promise();
 		});
 	}
 
@@ -1157,12 +1238,32 @@ $(function () {
 			}
 			if (action === 'claim-ltc') {
 				if (session.role !== 'alice') throw new Error('Only Alice claims LTC first');
-				buildClaim(session, 'LTC', 'ltcFunding', 'ltcClaim', 'swap_ltc_claimed').then(function (evidence) { SWAP.safeAdvance(session, 'LTC_CLAIMED', 'LTC claimed'); slog(session.swapId, '→ LTC claimed ' + evidence.txid); }).fail(function (error) { flash('warning', error.message || error); }).always(function () { $button.prop('disabled', false); });
+				slog(session.swapId, '→ Claim LTC requested by seller');
+				buildClaim(session, 'LTC', 'ltcFunding', 'ltcClaim', 'swap_ltc_claimed').then(function (evidence) {
+					var liveSession = ENGINE.restoreLive(session.swapId) || session;
+					SWAP.safeAdvance(liveSession, 'LTC_CLAIMED', 'LTC claimed');
+					ENGINE.saveLive(liveSession);
+					showActiveSwap(liveSession.swapId);
+					refreshSwaps();
+					slog(liveSession.swapId, '→ LTC claimed ' + evidence.txid);
+				}).fail(function (error) { flash('warning', error.message || error); }).always(function () { $button.prop('disabled', false); });
 				return;
 			}
 			if (action === 'claim-rod') {
 				if (session.role !== 'bob') throw new Error('Only Bob claims ROD after recovering secret/signature');
-				buildClaim(session, 'ROD', 'rodFunding', 'rodClaim', 'swap_rod_claimed').then(function (evidence) { SWAP.safeAdvance(session, 'ROD_CLAIMED', 'ROD claimed'); SWAP.safeAdvance(session, 'COMPLETE', 'Swap complete'); ENGINE.recordTrade(session); publish(session, 'swap_complete', { rodClaim: evidence }); slog(session.swapId, '✓ COMPLETE ' + evidence.txid); refreshHistory(); }).fail(function (error) { flash('warning', error.message || error); }).always(function () { $button.prop('disabled', false); });
+				slog(session.swapId, '→ Claim ROD requested by buyer');
+				buildClaim(session, 'ROD', 'rodFunding', 'rodClaim', 'swap_rod_claimed').then(function (evidence) {
+					var liveSession = ENGINE.restoreLive(session.swapId) || session;
+					SWAP.safeAdvance(liveSession, 'ROD_CLAIMED', 'ROD claimed');
+					SWAP.safeAdvance(liveSession, 'COMPLETE', 'Swap complete');
+					ENGINE.saveLive(liveSession);
+					ENGINE.recordTrade(liveSession);
+					publish(liveSession, 'swap_complete', { rodClaim: evidence });
+					showActiveSwap(liveSession.swapId);
+					refreshSwaps();
+					slog(liveSession.swapId, '✓ COMPLETE ' + evidence.txid);
+					refreshHistory();
+				}).fail(function (error) { flash('warning', error.message || error); }).always(function () { $button.prop('disabled', false); });
 				return;
 			}
 			if (action === 'refresh') {

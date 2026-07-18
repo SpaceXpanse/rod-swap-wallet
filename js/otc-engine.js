@@ -489,6 +489,7 @@
 			engine.pool.close();
 			engine.pool = null;
 		}
+		engine._trackedSwapSubscriptions = {};
 	};
 
 	engine.startRelays = function (urls) {
@@ -496,6 +497,7 @@
 		var list = urls || engine.loadConfig().relays || engine.DEFAULT_RELAYS;
 		if (!list || !list.length) list = engine.DEFAULT_RELAYS.slice();
 		engine.pool = new Pool(list);
+		engine._trackedSwapSubscriptions = engine._trackedSwapSubscriptions || {};
 		engine.pool.connect();
 		return engine.pool;
 	};
@@ -513,7 +515,43 @@
 	};
 
 	/* ============ Nostr auto-negotiation ============ */
-	var seen = {};
+	var SEEN_EVENT_IDS_KEY = 'rodOtcSeenEventIds';
+	var SEEN_EVENT_IDS_LIMIT = 800;
+	var GLOBAL_SUB_LOOKBACK_SECONDS = 30;
+	var TRACKED_SWAP_SUB_LOOKBACK_SECONDS = 900;
+	var TRACKED_SWAP_EVENT_LIMIT = 80;
+	var seen = loadSeenEventIds();
+	function loadSeenEventIds() {
+		try {
+			var parsed = JSON.parse(localStorage.getItem(SEEN_EVENT_IDS_KEY) || '[]');
+			var seenEventIds = {};
+			if (!$.isArray(parsed)) return seenEventIds;
+			for (var index = 0; index < parsed.length; index++) {
+				if (typeof parsed[index] === 'string' && parsed[index]) seenEventIds[parsed[index]] = true;
+			}
+			return seenEventIds;
+		} catch (error) {
+			return {};
+		}
+	}
+	function persistSeenEventId(eventId) {
+		if (!eventId || seen[eventId]) return;
+		seen[eventId] = true;
+		try {
+			var eventIds = Object.keys(seen);
+			if (eventIds.length > SEEN_EVENT_IDS_LIMIT) {
+				eventIds = eventIds.slice(eventIds.length - SEEN_EVENT_IDS_LIMIT);
+				seen = {};
+				for (var index = 0; index < eventIds.length; index++) {
+					seen[eventIds[index]] = true;
+				}
+			}
+			localStorage.setItem(SEEN_EVENT_IDS_KEY, JSON.stringify(Object.keys(seen)));
+		} catch (error) {}
+	}
+	function subscriptionSince(seconds) {
+		return Math.max(0, Math.floor(Date.now() / 1000) - seconds);
+	}
 	engine.onSwapMessage = null;
 	engine.publishSwapMessage = function (sess, type, payload) {
 		var nostrPrivateKey = sess.localNostrPrivateKey || '';
@@ -528,7 +566,7 @@
 		   as counterparty messages (a self-echo of swap_*_normal_signature used
 		   to overwrite remote* signature slots with our OWN signature, which
 		   assembled an invalid 2-of-2 scriptSig at claim time). */
-		if (ev && ev.id) seen[ev.id] = true;
+		if (ev && ev.id) persistSeenEventId(ev.id);
 		try { SWAP.addMessage(sess.swapId, ev); } catch (addError) { debugRelay('local message store skipped for ' + type + ': ' + (addError.message || addError)); }
 		sess.messages = sess.messages || [];
 		sess.messages.push(ev);
@@ -549,7 +587,7 @@
 				debugRelay('duplicate ' + source + ' ' + env.type + ' ' + env.swapId.slice(0, 12) + '… from ' + relayUrl);
 				return;
 			}
-			seen[eventId] = true;
+			persistSeenEventId(eventId);
 			debugRelay('event ' + source + ' ' + env.type + ' ' + env.swapId.slice(0, 12) + '… kind ' + ev.kind + ' from ' + relayUrl + ' sig=' + (!!ev.sig));
 			try { SWAP.addMessage(env.swapId, ev); }
 			catch (messageError) { debugRelay('message pre-store skipped for ' + env.type + ' ' + env.swapId.slice(0, 12) + '…: ' + (messageError.message || messageError)); }
@@ -565,8 +603,9 @@
 		engine._listenHandler = function (ev, relayUrl) {
 			handleRelaySwapEvent(ev, relayUrl || 'unknown relay', 'global', '');
 		};
-		var subId = engine.pool.sub({ kinds: otcKinds(), limit: 500 }, engine._listenHandler);
-		if (engine.onRelaySubscription) engine.onRelaySubscription(subId, { kinds: otcKinds(), limit: 500 }, 'global');
+		var globalFilter = { kinds: otcKinds(), since: subscriptionSince(GLOBAL_SUB_LOOKBACK_SECONDS), limit: TRACKED_SWAP_EVENT_LIMIT };
+		var subId = engine.pool.sub(globalFilter, engine._listenHandler);
+		if (engine.onRelaySubscription) engine.onRelaySubscription(subId, globalFilter, 'global');
 	};
 
 	engine.trackSwapId = function (swapId) {
@@ -577,17 +616,21 @@
 			throw new Error('Swap ID must be a 64-character hex value');
 		}
 		engine.trackedSwapIds = engine.trackedSwapIds || {};
+		engine._trackedSwapSubscriptions = engine._trackedSwapSubscriptions || {};
+		if (engine._trackedSwapSubscriptions[cleanSwapId]) return engine._trackedSwapSubscriptions[cleanSwapId].swapIdSub;
 		engine.trackedSwapIds[cleanSwapId] = true;
-		var dFilter = { kinds: otcKinds(), '#d': [cleanSwapId], limit: 500 };
+		var trackedSince = subscriptionSince(TRACKED_SWAP_SUB_LOOKBACK_SECONDS);
+		var dFilter = { kinds: otcKinds(), '#d': [cleanSwapId], since: trackedSince, limit: TRACKED_SWAP_EVENT_LIMIT };
 		var dSub = engine.pool.sub(dFilter, function (ev, relayUrl) {
 			handleRelaySwapEvent(ev, relayUrl || 'unknown relay', '#d', cleanSwapId);
 		});
 		if (engine.onRelaySubscription) engine.onRelaySubscription(dSub, dFilter, '#d');
-		var swapIdFilter = { kinds: otcKinds(), '#swapId': [cleanSwapId], limit: 500 };
+		var swapIdFilter = { kinds: otcKinds(), '#swapId': [cleanSwapId], since: trackedSince, limit: TRACKED_SWAP_EVENT_LIMIT };
 		var swapIdSub = engine.pool.sub(swapIdFilter, function (ev, relayUrl) {
 			handleRelaySwapEvent(ev, relayUrl || 'unknown relay', '#swapId', cleanSwapId);
 		});
 		if (engine.onRelaySubscription) engine.onRelaySubscription(swapIdSub, swapIdFilter, '#swapId');
+		engine._trackedSwapSubscriptions[cleanSwapId] = { dSub: dSub, swapIdSub: swapIdSub };
 		return swapIdSub;
 	};
 

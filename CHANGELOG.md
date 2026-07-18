@@ -20,7 +20,7 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
 - End-to-end proof harness (Playwright, two real browser contexts as Alice/Bob, local NIP-01 relay, mock ROD API + mock esplora that fully validate every broadcast transaction with independent bitcoinjs-lib sighashes + noble secp256k1): 24/24 checks pass, including a 0.05 LTC swap (below the old 0.21 LTC unit-bug threshold), 2-of-2 P2SH CHECKMULTISIG claim validation on both chains, mid-swap page-reload resilience, and both sessions reaching `COMPLETE`. Regression run against the pre-fix code reproduces the LTC failure (`bad-txns-in-belowout (20000000 < 1999999999999000)`).
 
 ### Documentation
-- Carbon Memory was refreshed after OTC codebase analysis; volatile memory now records the current OTC integration surface, indexed-source refresh inputs, and follow-up verification for the missing [`otc-test.html`](otc-test.html) reference.
+- Carbon Memory was refreshed after OTC codebase analysis; volatile memory now records the current OTC integration surface, indexed-source refresh inputs, follow-up verification for the missing [`otc-test.html`](otc-test.html) reference, and the latest blast-radius review across [`js/otc-engine.js`](js/otc-engine.js), [`js/otc-app-ui.js`](js/otc-app-ui.js), [`js/otc-swap.js`](js/otc-swap.js), [`sw.js`](sw.js), and [`_headers`](_headers).
 
 ### Added
 - Browser OTC runtime implementation:

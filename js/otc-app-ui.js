@@ -97,17 +97,13 @@ $(function () {
 		'<label>LTC amount</label><input id="nsLtc" class="form-control" value="5.00000000">',
 		'<label>Release ROD height <small id="nsHeightHint" class="text-muted"></small></label><input id="nsRelease" class="form-control" value="">',
 		'<label>ROD name for order <small class="text-muted">(written on Create order via name_register / name_update)</small></label>',
-		'<div class="input-group">',
-		'<input id="nsOrderName" class="form-control" placeholder="d/otc-swap/…" value="' + esc(localStorage.getItem('otcLastOrderName') || '') + '">',
-		'<span class="input-group-btn"><button class="btn btn-default" type="button" id="nsOrderNameGen" title="Generate name">Random</button></span>',
-		'</div>',
+		'<input id="nsOrderName" class="form-control" placeholder="d/otc-swap/…" value="" readonly>',
 		'<hr style="border-color:rgba(126,233,255,0.15)">',
 		'<label>Counterparty identity <small class="text-muted">(required to start a swap — leave empty to post an order)</small></label>',
 		'<input id="nsPeer" class="form-control" placeholder="bob.rod or address" autocomplete="off" value="">',
 		'<label>Counterparty swap xpub <small class="text-muted">(only auto-filled when you Take an order on Dashboard)</small></label>',
 		'<input id="nsPeerXpub" class="form-control" placeholder="xpub… / Ltub…" autocomplete="off" value="">',
-		'<label>Counterparty payout address <small class="text-muted">(buyer ROD address when you sell, seller LTC address when you buy)</small></label>',
-		'<input id="nsPeerPayoutAddr" class="form-control" placeholder="Counterparty settlement address" autocomplete="off" value="">',
+		'<input id="nsPeerPayoutAddr" type="hidden" value="">',
 		'<div style="margin-top:14px">',
 		'<button class="btn btn-default" id="nsCreateOrder" type="button">Create order</button> ',
 		'<button class="btn btn-primary" id="nsCreate" type="button">Create &amp; start swap</button>',
@@ -378,7 +374,7 @@ $(function () {
 			var dueBlock = o._dueBlock ? '<div class="text-muted" style="font-size:10px">Due block ' + esc(o._dueBlock) + (currentRodHeight ? ' · ' + esc(o._dueBlock - currentRodHeight) + ' left' : '') + '</div>' : '';
 			return '<tr><td>' + esc(o.seller || o._name || '—') + createdAt + dueBlock + '</td><td>' + esc(o.give || o.rodAmount) + '</td><td>' + esc(o.want || o.ltcAmount) + '</td>' +
 				'<td><code style="font-size:10px">' + esc(short(o.sellerSwapXpub || o.buyerSwapXpub || '')) + '</code></td>' +
-				'<td><button class="btn btn-xs btn-primary otcTakeOffer" data-rod="' + esc(o.give || o.rodAmount) + '" data-ltc="' + esc(o.want || o.ltcAmount) + '" data-peer="' + esc(o.seller || o._name) + '" data-xpub="' + esc(o.sellerSwapXpub || o.buyerSwapXpub || '') + '" data-release="' + esc(o.releaseRodHeight || '') + '" data-side="' + esc(side) + '">Take</button></td></tr>';
+				'<td><button class="btn btn-xs btn-primary otcTakeOffer" data-rod="' + esc(o.give || o.rodAmount) + '" data-ltc="' + esc(o.want || o.ltcAmount) + '" data-peer="' + esc(o.seller || o.buyer || o._name) + '" data-xpub="' + esc(o.sellerSwapXpub || o.buyerSwapXpub || '') + '" data-buyer-rod-payout="' + esc(o.buyerRodPayoutAddress || '') + '" data-seller-ltc-payout="' + esc(o.sellerLtcPayoutAddress || '') + '" data-release="' + esc(o.releaseRodHeight || '') + '" data-side="' + esc(side) + '">Take</button></td></tr>';
 		}).join(''));
 		$('#otcBookDetail').show();
 	});
@@ -529,6 +525,7 @@ $(function () {
 		$('#otcActiveNone').hide(); $('#otcActiveDetail').show();
 		var readiness = s.readiness || {};
 		var execution = s.execution || {};
+		var adaptorPointDisplay = adaptorPointSummary(s);
 		var rows = [
 			['Swap ID', '<code>' + esc(s.swapId) + '</code>'],
 			['State', '<span class="label label-info">' + esc(s.state) + '</span>'],
@@ -551,7 +548,7 @@ $(function () {
 			['ROD claim tx', txSummary(execution.rodClaim)],
 			['Redeem (ROD)', '<code style="font-size:9px;word-break:break-all">' + esc(s.terms.rodFunding.redeemScript) + '</code>'],
 			['Redeem (LTC)', '<code style="font-size:9px;word-break:break-all">' + esc(s.terms.ltcFunding.redeemScript) + '</code>'],
-			['Adaptor point', s.adaptorPoint ? '<code style="font-size:10px">' + esc(s.adaptorPoint) + '</code>' : '<span class="text-muted">not yet</span>'],
+			['Adaptor point', adaptorPointDisplay],
 			['Alice pubkey', '<code style="font-size:10px">' + esc(s.terms.aliceChildPubKey) + '</code>'],
 			['Bob pubkey', '<code style="font-size:10px">' + esc(s.terms.bobChildPubKey) + '</code>'],
 			['Seller xpub', '<code style="font-size:10px">' + esc(short(s.sellerSwapXpub)) + '</code>'],
@@ -568,6 +565,22 @@ $(function () {
 		var logs = (s._log || []);
 		$('#otcALog').html(logs.map(function (l) { return '<div>' + esc(l) + '</div>'; }).join('') || '<div class="text-muted">No events yet.</div>');
 		$('#otcExecStatus').html(executionStatusHtml(s));
+	}
+
+	function adaptorPointSummary(session) {
+		if (session && session.adaptorPoint) {
+			return '<code style="font-size:10px">' + esc(session.adaptorPoint) + '</code>';
+		}
+		if (sessionHasCompletedOrClaimEvidence(session)) {
+			return '<span class="text-warning">not recorded in this local session</span>';
+		}
+		return '<span class="text-muted">not yet</span>';
+	}
+
+	function sessionHasCompletedOrClaimEvidence(session) {
+		if (!session) return false;
+		var execution = session.execution || {};
+		return session.state === 'COMPLETE' || !!((execution.ltcClaim && execution.ltcClaim.txid) || (execution.rodClaim && execution.rodClaim.txid));
 	}
 
 	function txSummary(evidence) {
@@ -615,12 +628,111 @@ $(function () {
 		return chainCode === 'ROD' ? '0.00051900' : '0.00001000';
 	}
 
+	function claimSignatureKey(chainCode, scope) {
+		if (scope === 'local') return chainCode === 'LTC' ? 'localLtcClaimSignature' : 'localRodClaimSignature';
+		return chainCode === 'LTC' ? 'remoteLtcClaimSignature' : 'remoteRodClaimSignature';
+	}
+
+	function adaptorSignatureKey(chainCode, scope) {
+		if (scope === 'local') return chainCode === 'LTC' ? 'localLtcAdaptorSignature' : 'localRodAdaptorSignature';
+		return chainCode === 'LTC' ? 'remoteLtcAdaptorSignature' : 'remoteRodAdaptorSignature';
+	}
+
+	function adaptorMessageType(chainCode) {
+		return chainCode === 'LTC' ? 'swap_ltc_adaptor_signature' : 'swap_rod_adaptor_signature';
+	}
+
+	function normalMessageType(chainCode) {
+		return chainCode === 'LTC' ? 'swap_ltc_normal_signature' : 'swap_rod_normal_signature';
+	}
+
+	function shouldPublishAdaptorSignature(session, chainCode) {
+		return (session.role === 'alice' && chainCode === 'ROD') || (session.role === 'bob' && chainCode === 'LTC');
+	}
+
+	function adaptorSigningPublicKey(session, chainCode) {
+		return chainCode === 'LTC' ? session.terms.bobChildPubKey : session.terms.aliceChildPubKey;
+	}
+
+	function adaptorSecretForClaim(session, chainCode) {
+		if (session.role === 'alice' && chainCode === 'LTC') return session.adaptorSecret || '';
+		if (session.role === 'bob' && chainCode === 'ROD') return session.recoveredAdaptorSecret || '';
+		return '';
+	}
+
+	function ensureAliceAdaptorState(session) {
+		if (!session || session.role !== 'alice') return false;
+		if (session.adaptorSecret && session.adaptorPoint) return false;
+		var adaptorSecret = session.adaptorSecret || coinjs.adaptor.generateSecret();
+		session.adaptorSecret = adaptorSecret;
+		session.adaptorPoint = coinjs.adaptor.publicKey(adaptorSecret);
+		ENGINE.saveLive(session);
+		if (session.adaptorPoint && ENGINE.pool) {
+			publish(session, 'swap_adaptor_point', { adaptorPoint: session.adaptorPoint });
+		}
+		slog(session.swapId, '✓ Initialized Alice adaptor secret and point');
+		return true;
+	}
+
+	function persistAliceAdaptorState(session, note) {
+		if (!session || session.role !== 'alice') return false;
+		var changed = ensureAliceAdaptorState(session);
+		if (changed && note) {
+			slog(session.swapId, note);
+		}
+		return changed;
+	}
+
+	function buildClaimTxForFunding(session, chainCode, funding) {
+		return ENGINE.buildClaimTxFromFunding(chainCode, funding, fundingTarget(session, chainCode).redeemScript, claimDestination(session, chainCode), claimFee(chainCode));
+	}
+
+	function verifyRemoteAdaptorSignature(session, chainCode, adaptorSignatureHex) {
+		var fundingKey = chainCode === 'LTC' ? 'ltcFunding' : 'rodFunding';
+		var funding = session.execution && session.execution[fundingKey];
+		if (!funding || funding.vout == null || !session.adaptorPoint) return true;
+		var claimTx = buildClaimTxForFunding(session, chainCode, funding);
+		return coinjs.adaptor.verify({
+			messageHash: ENGINE.sighash(claimTx),
+			signingPublicKey: adaptorSigningPublicKey(session, chainCode),
+			adaptorPublicKey: session.adaptorPoint,
+			adaptorSignature: Crypto.util.hexToBytes(adaptorSignatureHex)
+		});
+	}
+
+	function ensureClaimSignatureFromAdaptor(session, chainCode) {
+		var remoteClaimKey = claimSignatureKey(chainCode, 'remote');
+		if (session[remoteClaimKey]) return session[remoteClaimKey];
+		var remoteAdaptorKey = adaptorSignatureKey(chainCode, 'remote');
+		var adaptorSecret = adaptorSecretForClaim(session, chainCode);
+		if (!session[remoteAdaptorKey] || !adaptorSecret) return '';
+		session[remoteClaimKey] = ENGINE.completeSig(Crypto.util.hexToBytes(session[remoteAdaptorKey]), adaptorSecret);
+		ENGINE.saveLive(session);
+		return session[remoteClaimKey];
+	}
+
+	function claimRemoteSignatureReady(session, chainCode) {
+		return !!(session[claimSignatureKey(chainCode, 'remote')] || (session[adaptorSignatureKey(chainCode, 'remote')] && adaptorSecretForClaim(session, chainCode)));
+	}
+
+	function maybeAdvanceSignatureExchange(session) {
+		var signaturesReady = session.role === 'alice'
+			? !!(session.localRodAdaptorSignature && session.localLtcClaimSignature && session.remoteLtcAdaptorSignature && session.remoteRodNormalSignature)
+			: !!(session.localLtcAdaptorSignature && session.localRodClaimSignature && session.remoteRodAdaptorSignature && session.remoteLtcNormalSignature);
+		if (!signaturesReady) return false;
+		try {
+			SWAP.safeAdvance(session, 'SIGNATURES_EXCHANGED', 'Adaptor-gated settlement signatures exchanged');
+			ENGINE.saveLive(session);
+			return true;
+		} catch (advanceError) {
+			return false;
+		}
+	}
+
 	function claimReady(session, chainCode) {
 		var execution = session.execution || {};
 		var funding = chainCode === 'LTC' ? execution.ltcFunding : execution.rodFunding;
-		var remoteSignature = chainCode === 'LTC' ? session.remoteLtcClaimSignature : session.remoteRodClaimSignature;
-		var localSignature = chainCode === 'LTC' ? session.localLtcClaimSignature : session.localRodClaimSignature;
-		return !!(funding && funding.vout != null && localSignature && remoteSignature);
+		return !!(funding && funding.vout != null && claimRemoteSignatureReady(session, chainCode));
 	}
 
 	function ltcClaimReady(session) {
@@ -636,8 +748,119 @@ $(function () {
 		$('#nsPeer').val('');
 		$('#nsPeerXpub').val('');
 		$('#nsPeerPayoutAddr').val('');
+		nsPeerPayoutAddrManual = false;
+		nsPeerPayoutLookupToken++;
 		nsPrefillFromOrder = false;
 		updateNsModeHint();
+	}
+
+	var nsPeerPayoutAddrManual = false;
+	var nsPeerPayoutLookupToken = 0;
+	var nsPeerPayoutAutofillWriting = false;
+
+	function payoutChainCodeForRole(role) {
+		return role === 'alice' ? 'ROD' : 'LTC';
+	}
+
+	function payoutAddressFromOffer(offer, role) {
+		if (!offer) return '';
+		return role === 'alice'
+			? $.trim(offer.buyerRodPayoutAddress || '')
+			: $.trim(offer.sellerLtcPayoutAddress || '');
+	}
+
+	function findOfferByCounterpartyIdentity(peerIdentity) {
+		var peer = $.trim(peerIdentity || '');
+		if (!peer) return null;
+		for (var index = 0; index < allOffers.length; index++) {
+			var offer = allOffers[index] || {};
+			if ($.trim(offer.seller || '') === peer || $.trim(offer.buyer || '') === peer || $.trim(offer._name || '') === peer) {
+				return offer;
+			}
+		}
+		return null;
+	}
+
+	function looksLikeChainAddress(chainCode, value) {
+		var text = $.trim(value || '');
+		if (!text) return false;
+		if (chainCode === 'ROD') return /^R[1-9A-HJ-NP-Za-km-z]{20,}$/.test(text) || /^rod1[ac-hj-np-z02-9]{8,}$/i.test(text);
+		return /^[LM3][1-9A-HJ-NP-Za-km-z]{20,}$/.test(text) || /^ltc1[ac-hj-np-z02-9]{8,}$/i.test(text);
+	}
+
+	function identityLookupKeyOrder(chainCode) {
+		return chainCode === 'ROD'
+			? ['buyerRodPayoutAddress', 'rodAddress', 'rodWalletAddress', 'walletAddress', 'paymentAddress', 'payoutAddress', 'address']
+			: ['sellerLtcPayoutAddress', 'ltcAddress', 'ltcWalletAddress', 'walletAddress', 'paymentAddress', 'payoutAddress', 'address'];
+	}
+
+	function extractIdentityPayoutAddress(record, chainCode) {
+		var visited = [];
+		var keys = identityLookupKeyOrder(chainCode);
+		function findValue(node) {
+			if (!node || typeof node !== 'object') return '';
+			if (visited.indexOf(node) !== -1) return '';
+			visited.push(node);
+			for (var i = 0; i < keys.length; i++) {
+				var candidate = node[keys[i]];
+				if (looksLikeChainAddress(chainCode, candidate)) return $.trim(candidate);
+			}
+			for (var propertyName in node) {
+				if (!Object.prototype.hasOwnProperty.call(node, propertyName)) continue;
+				var nested = node[propertyName];
+				if (!nested || typeof nested !== 'object') continue;
+				var found = findValue(nested);
+				if (found) return found;
+			}
+			return '';
+		}
+		return findValue(record);
+	}
+
+	function setPeerPayoutAddress(value) {
+		nsPeerPayoutAutofillWriting = true;
+		$('#nsPeerPayoutAddr').val(value || '');
+		nsPeerPayoutAutofillWriting = false;
+		nsPeerPayoutAddrManual = false;
+		updateNsModeHint();
+	}
+
+	function maybeResolveCounterpartyPayoutAddress() {
+		var peer = $.trim($('#nsPeer').val());
+		var role = $('#nsRole').val();
+		var chainCode = payoutChainCodeForRole(role);
+		var currentPayoutAddress = $.trim($('#nsPeerPayoutAddr').val());
+		var lookupToken = ++nsPeerPayoutLookupToken;
+		var matchingOffer = findOfferByCounterpartyIdentity(peer);
+		function rejectLookup(message) {
+			return $.Deferred().reject(new Error(message)).promise();
+		}
+		if (!peer) {
+			if (!nsPeerPayoutAddrManual) setPeerPayoutAddress('');
+			return $.Deferred().resolve('').promise();
+		}
+		if (nsPeerPayoutAddrManual && currentPayoutAddress) return $.Deferred().resolve(currentPayoutAddress).promise();
+		if (matchingOffer) {
+			var offerPayoutAddress = payoutAddressFromOffer(matchingOffer, role);
+			if (offerPayoutAddress) {
+				setPeerPayoutAddress(offerPayoutAddress);
+				return $.Deferred().resolve(offerPayoutAddress).promise();
+			}
+		}
+		if (looksLikeChainAddress(chainCode, peer)) {
+			setPeerPayoutAddress(peer);
+			return $.Deferred().resolve(peer).promise();
+		}
+		return ENGINE.nameLookup(peer).then(function (record) {
+			if (lookupToken !== nsPeerPayoutLookupToken) return rejectLookup('Counterparty payout lookup became stale; retry create swap.');
+			if (nsPeerPayoutAddrManual) return $.trim($('#nsPeerPayoutAddr').val());
+			var resolvedAddress = extractIdentityPayoutAddress(record, chainCode);
+			if (resolvedAddress) {
+				setPeerPayoutAddress(resolvedAddress);
+				return resolvedAddress;
+			}
+			return rejectLookup('Could not resolve counterparty payout address from identity ' + peer);
+		});
 	}
 
 	function updateNsModeHint() {
@@ -652,7 +875,22 @@ $(function () {
 			$('#nsModeHint').html('Mode: <b>create order</b> — counterparty fields incomplete. Use <b>Create order</b>, or Take an order on the Dashboard to fill counterparty and payout details.');
 		}
 	}
-	$('#nsPeer, #nsPeerXpub, #nsPeerPayoutAddr').on('input change', updateNsModeHint);
+	$('#nsPeer').on('input change blur', function () {
+		if (!nsPeerPayoutAutofillWriting) {
+			nsPeerPayoutAddrManual = false;
+			maybeResolveCounterpartyPayoutAddress();
+		}
+		updateNsModeHint();
+	});
+	$('#nsRole').on('change', function () {
+		if (!nsPeerPayoutAddrManual) maybeResolveCounterpartyPayoutAddress();
+		updateNsModeHint();
+	});
+	$('#nsPeerXpub').on('input change', updateNsModeHint);
+	$('#nsPeerPayoutAddr').on('input change', function () {
+		if (!nsPeerPayoutAutofillWriting) nsPeerPayoutAddrManual = !!$.trim($(this).val());
+		updateNsModeHint();
+	});
 
 	function decimalToBaseUnits(value) {
 		var text = $.trim(value == null ? '' : String(value));
@@ -1074,10 +1312,14 @@ $(function () {
 	}
 
 	function buildRemoteSignature(session, chainCode, claimTx) {
-		var remote = chainCode === 'LTC' ? session.remoteLtcClaimSignature : session.remoteRodClaimSignature;
+		var remoteClaimKey = claimSignatureKey(chainCode, 'remote');
+		var remote = session[remoteClaimKey];
 		if (remote) return remote;
-		if (session.role === 'alice' && chainCode === 'LTC') return session.remoteNormalSignature || '';
-		if (session.role === 'bob' && chainCode === 'ROD') return session.remoteNormalSignature || '';
+		remote = ensureClaimSignatureFromAdaptor(session, chainCode);
+		if (remote) {
+			slog(session.swapId, '✓ Completed remote ' + chainCode + ' adaptor signature for claim assembly');
+			return remote;
+		}
 		return '';
 	}
 
@@ -1102,17 +1344,36 @@ $(function () {
 
 	function shareClaimSignature(session, chainCode) {
 		var fundingKey = chainCode === 'LTC' ? 'ltcFunding' : 'rodFunding';
-		var localKey = chainCode === 'LTC' ? 'localLtcClaimSignature' : 'localRodClaimSignature';
-		var messageType = chainCode === 'LTC' ? 'swap_ltc_normal_signature' : 'swap_rod_normal_signature';
 		var funding = session.execution && session.execution[fundingKey];
-		if (!funding || funding.vout == null || session[localKey]) return false;
-		var destinationAddress = claimDestination(session, chainCode);
-		slog(session.swapId, '→ Preparing ' + chainCode + ' claim signature for ' + payoutDestinationLabel(chainCode) + ' ' + destinationAddress);
-		var tx = ENGINE.buildClaimTxFromFunding(chainCode, funding, fundingTarget(session, chainCode).redeemScript, destinationAddress, claimFee(chainCode));
-		session[localKey] = ENGINE.signClaimTx(chainCode, tx, getLocalChildWif(session, chainCode));
-		ENGINE.saveLive(session);
-		publish(session, messageType, { chainCode: chainCode, signature: session[localKey], txid: funding.txid, vout: funding.vout });
-		slog(session.swapId, '→ Auto: shared ' + chainCode + ' claim signature');
+		if (!funding || funding.vout == null) return false;
+		var tx = buildClaimTxForFunding(session, chainCode, funding);
+		if (shouldPublishAdaptorSignature(session, chainCode)) {
+			var localAdaptorKey = adaptorSignatureKey(chainCode, 'local');
+			if (session[localAdaptorKey]) return false;
+			ensureAliceAdaptorState(session);
+			if (!session.adaptorPoint) {
+				slog(session.swapId, '↻ Waiting for adaptor point before sharing ' + chainCode + ' adaptor signature');
+				return false;
+			}
+			var adaptorSignature = ENGINE.makeAdaptorSig(session, tx);
+			session[localAdaptorKey] = adaptorSignature.hex;
+			session.localAdaptorSignature = adaptorSignature.hex;
+			ENGINE.saveLive(session);
+			if (session.role === 'alice') {
+				publish(session, 'swap_adaptor_point', { adaptorPoint: session.adaptorPoint });
+			}
+			publish(session, adaptorMessageType(chainCode), { chainCode: chainCode, hex: adaptorSignature.hex, txid: funding.txid, vout: funding.vout });
+			slog(session.swapId, '→ Auto: shared ' + chainCode + ' adaptor signature');
+		} else {
+			var localClaimKey = claimSignatureKey(chainCode, 'local');
+			if (session[localClaimKey]) return false;
+			session[localClaimKey] = ENGINE.signClaimTx(chainCode, tx, getLocalChildWif(session, chainCode));
+			session[chainCode === 'LTC' ? 'localNormalSignature' : 'localRodNormalSignature'] = session[localClaimKey];
+			ENGINE.saveLive(session);
+			publish(session, normalMessageType(chainCode), { chainCode: chainCode, signature: session[localClaimKey], txid: funding.txid, vout: funding.vout });
+			slog(session.swapId, '→ Auto: shared ' + chainCode + ' ordinary claim signature');
+		}
+		maybeAdvanceSignatureExchange(session);
 		return true;
 	}
 
@@ -1186,13 +1447,14 @@ $(function () {
 			} catch (hashError) {}
 		}
 		function persistClaimEvidence(txid, alreadyBroadcast) {
+			persistAliceAdaptorState(session, '✓ Backfilled Alice adaptor point before persisting claim evidence');
 			var evidence = {
 				chainCode: chainCode,
 				txid: txid || claimTxid,
 				txhex: claimTxHex,
 				localSignature: localSig,
 				remoteSignature: remoteSig,
-				completedSigHex: localSig,
+				completedSigHex: chainCode === 'LTC' ? remoteSig : '',
 				broadcastAt: new Date().toISOString()
 			};
 			if (alreadyBroadcast) evidence.alreadyInChain = true;
@@ -1296,6 +1558,7 @@ $(function () {
 	/* Auto-fill release height; clear counterparty unless arrived via Take offer */
 	$('a[href="#otcNew"]').on('shown.bs.tab', function () {
 		checkWallet();
+		refreshAutoOrderName();
 		if (!nsPrefillFromOrder) {
 			clearCounterpartyFields();
 		} else {
@@ -1323,6 +1586,21 @@ $(function () {
 			hex = Math.abs(Date.now()).toString(16) + Math.floor(Math.random() * 1e8).toString(16);
 		}
 		return hex;
+	}
+
+	function buildAutoOrderName() {
+		return 'd/otc-swap/' + randomOrderNameSuffix();
+	}
+
+	function ensureAutoOrderName(forceRefresh) {
+		var currentName = $.trim($('#nsOrderName').val());
+		if (!currentName || forceRefresh) {
+			$('#nsOrderName').val(buildAutoOrderName());
+		}
+	}
+
+	function refreshAutoOrderName() {
+		ensureAutoOrderName(true);
 	}
 
 	function buildOpenOrderPayload() {
@@ -1363,25 +1641,20 @@ $(function () {
 	}
 
 	function addNameToScanList(name) {
-		/* Orderbook now auto-scans ^d/otc-swap/ via name_scan; keep last name for UX only */
-		var n = $.trim(name || '');
-		if (n) localStorage.setItem('otcLastOrderName', n);
+		/* Orderbook now auto-scans ^d/otc-swap/ via name_scan. */
 	}
-
-	$('#nsOrderNameGen').on('click', function () {
-		$('#nsOrderName').val('d/otc-swap/' + randomOrderNameSuffix());
-	});
 
 	/* Create open order and publish full JSON to ROD name DB via Core RPC */
 	$('#nsCreateOrder').on('click', function () {
 		var $btn = $('#nsCreateOrder');
 		try {
+			refreshAutoOrderName();
 			var payload = buildOpenOrderPayload();
 			var bytes = payload._bytes;
 			delete payload._bytes;
 			var name = $.trim($('#nsOrderName').val());
 			if (!name) {
-				name = 'd/otc-swap/' + randomOrderNameSuffix();
+				name = buildAutoOrderName();
 				$('#nsOrderName').val(name);
 			}
 			$('#nsSwapId').val('');
@@ -1392,7 +1665,6 @@ $(function () {
 				$('#nsPublishStatus').text('Publishing to ROD name DB…');
 				return ENGINE.namePublish(name, payload);
 			}).then(function (res) {
-				localStorage.setItem('otcLastOrderName', res.name);
 				addNameToScanList(res.name);
 				var tx = res.txid || '';
 				var net = (coinjs.getNetwork && coinjs.getNetwork()) || {};
@@ -1435,26 +1707,34 @@ $(function () {
 			var role = $('#nsRole').val(), peer = $.trim($('#nsPeer').val()), peerXpub = $.trim($('#nsPeerXpub').val()), peerPayoutAddress = $.trim($('#nsPeerPayoutAddr').val());
 			if (!peer) throw new Error('Enter counterparty identity, or Take an order on the Dashboard first');
 			if (!peerXpub) throw new Error('Enter counterparty swap xpub, or Take an order on the Dashboard first');
-			if (!peerPayoutAddress) throw new Error('Enter counterparty payout address, or Take an order on the Dashboard first');
 			if (peerXpub === swapAcct.xpub) throw new Error('Counterparty xpub must differ from your swap xpub');
 
-			/* Dust-limit validation: both the funding output AND the claim
-			   output (funding minus fee) must exceed the network dust
-			   threshold — otherwise the tx will be rejected by nodes. */
-			var DUST_LIMIT = 546; /* satoshis — applies to both ROD and LTC P2SH outputs */
-			var rodSats = CHAINS.decimalToSats($('#nsRod').val());
-			var ltcSats = CHAINS.decimalToSats($('#nsLtc').val());
-			var rodClaimFeeSats = CHAINS.decimalToSats(claimFee('ROD'));
-			var ltcClaimFeeSats = CHAINS.decimalToSats(claimFee('LTC'));
-			if (rodSats < DUST_LIMIT) throw new Error('ROD amount (' + rodSats + ' sats) is below dust limit (' + DUST_LIMIT + ' sats). Minimum: ' + CHAINS.satsToDecimal(DUST_LIMIT) + ' ROD');
-			if (ltcSats < DUST_LIMIT) throw new Error('LTC amount (' + ltcSats + ' sats) is below dust limit (' + DUST_LIMIT + ' sats). Minimum: ' + CHAINS.satsToDecimal(DUST_LIMIT) + ' LTC');
-			if (rodSats - rodClaimFeeSats < DUST_LIMIT) throw new Error('ROD claim output (' + (rodSats - rodClaimFeeSats) + ' sats) would be dust after fee. Increase ROD amount.');
-			if (ltcSats - ltcClaimFeeSats < DUST_LIMIT) throw new Error('LTC claim output (' + (ltcSats - ltcClaimFeeSats) + ' sats) would be dust after fee. Increase LTC amount.');
-
 			$btn.prop('disabled', true);
-			flash('info', 'Checking wallet balance…');
+			flash('info', 'Resolving counterparty payout address…');
 
-			ensureWalletFundsForRole(role, $('#nsRod').val(), $('#nsLtc').val()).then(function (balanceProof) {
+			maybeResolveCounterpartyPayoutAddress().then(function (resolvedPeerPayoutAddress) {
+				peerPayoutAddress = $.trim(resolvedPeerPayoutAddress || $('#nsPeerPayoutAddr').val());
+				if (!peerPayoutAddress) {
+					return $.Deferred().reject(new Error('Could not resolve counterparty payout address from counterparty identity')).promise();
+				}
+
+				/* Dust-limit validation: both the funding output AND the claim
+				   output (funding minus fee) must exceed the network dust
+				   threshold — otherwise the tx will be rejected by nodes. */
+				var DUST_LIMIT = 546; /* satoshis — applies to both ROD and LTC P2SH outputs */
+				var rodSats = CHAINS.decimalToSats($('#nsRod').val());
+				var ltcSats = CHAINS.decimalToSats($('#nsLtc').val());
+				var rodClaimFeeSats = CHAINS.decimalToSats(claimFee('ROD'));
+				var ltcClaimFeeSats = CHAINS.decimalToSats(claimFee('LTC'));
+				if (rodSats < DUST_LIMIT) throw new Error('ROD amount (' + rodSats + ' sats) is below dust limit (' + DUST_LIMIT + ' sats). Minimum: ' + CHAINS.satsToDecimal(DUST_LIMIT) + ' ROD');
+				if (ltcSats < DUST_LIMIT) throw new Error('LTC amount (' + ltcSats + ' sats) is below dust limit (' + DUST_LIMIT + ' sats). Minimum: ' + CHAINS.satsToDecimal(DUST_LIMIT) + ' LTC');
+				if (rodSats - rodClaimFeeSats < DUST_LIMIT) throw new Error('ROD claim output (' + (rodSats - rodClaimFeeSats) + ' sats) would be dust after fee. Increase ROD amount.');
+				if (ltcSats - ltcClaimFeeSats < DUST_LIMIT) throw new Error('LTC claim output (' + (ltcSats - ltcClaimFeeSats) + ' sats) would be dust after fee. Increase LTC amount.');
+
+				flash('info', 'Checking wallet balance…');
+
+				return ensureWalletFundsForRole(role, $('#nsRod').val(), $('#nsLtc').val());
+			}).then(function (balanceProof) {
 				var myAddr = walletId.address;
 				var orderId = (role === 'alice' ? myAddr : peer) + '/otc-' + Date.now();
 				var swapId = SWAP.swapIdFromOrder(orderId, '1', role === 'alice' ? peer : myAddr);
@@ -1489,7 +1769,7 @@ $(function () {
 				/* Auto-negotiate terms and readiness only; user accept/decline controls funding start. */
 				SWAP.advanceState(session, 'NEGOTIATING', 'Terms sent');
 				if (ENGINE.pool) {
-					ENGINE.publishSwapMessage(session, 'swap_terms', { terms: session.terms });
+					ENGINE.publishSwapMessage(session, 'swap_terms', { terms: session.terms, adaptorPoint: session.adaptorPoint || '' });
 					if (session.adaptorPoint) ENGINE.publishSwapMessage(session, 'swap_adaptor_point', { adaptorPoint: session.adaptorPoint });
 					ENGINE.publishSwapMessage(session, 'swap_ready', { readiness: session.readiness.local });
 					slog(session.swapId, '→ Sent terms + readiness via Nostr');
@@ -1513,8 +1793,8 @@ $(function () {
 				clearCounterpartyFields();
 				refreshSwaps();
 				flash('success', 'Swap created: ' + short(swapId) + '. Review details, then accept or decline.');
-			}, function (error) {
-				flash('danger', error);
+			}).fail(function (error) {
+				flash('danger', (error && error.message) ? error.message : String(error));
 			}).always(function () {
 				$btn.prop('disabled', false);
 			});
@@ -1544,7 +1824,7 @@ $(function () {
 	}
 
 	function createIncomingTermsSession(env, eventObject) {
-		var p = env.payload || {}, terms = p.terms;
+		var p = env.payload || {}, terms = p.terms, incomingAdaptorPoint = p.adaptorPoint || '';
 		if (env.type !== 'swap_terms' || !terms) {
 			if (ENGINE.trackedSwapIds && ENGINE.trackedSwapIds[env.swapId]) log('Tracked ' + short(env.swapId) + ' ignored until swap_terms arrives; got ' + env.type);
 			return null;
@@ -1588,8 +1868,12 @@ $(function () {
 				ensureRemotePeer(session, eventObject);
 				try { SWAP.addMessage(env.swapId, eventObject); } catch (messageError) {}
 			}
+			if (incomingAdaptorPoint && !session.adaptorPoint) {
+				session.adaptorPoint = incomingAdaptorPoint;
+			}
 			session.localNostrPubkey = NOSTR.identityFromWif(walletId.wif).pubkey || '';
 			session.localNostrPrivateKey = walletId.nostrPrivateKey || NOSTR.identityFromWif(walletId.wif).privateKeyHex || '';
+			ensureAliceAdaptorState(session);
 			SWAP.safeAdvance(session, 'NEGOTIATING', 'Incoming terms received');
 			ENGINE.saveLive(session);
 			$('#otcTrackSwapStatus').html('Added <code>' + esc(short(env.swapId)) + '</code> from incoming terms.');
@@ -1625,6 +1909,7 @@ $(function () {
 			sess.adaptorPoint = p.adaptorPoint;
 			slog(env.swapId, '← Adaptor point received');
 			ENGINE.saveLive(sess);
+			shareReadyClaimSignatures(sess);
 		}
 		if (env.type === 'swap_ready' && p.readiness) {
 			try { ensureRemotePeer(sess, eventObject); } catch (peerError0) { slog(env.swapId, peerError0.message || peerError0); return; }
@@ -1654,16 +1939,26 @@ $(function () {
 			refreshSwaps();
 		}
 		if ((env.type.indexOf('adaptor_signature') > -1) && p.hex && !isLocalEcho(sess, eventObject)) {
+			var adaptorChainCode = env.type === 'swap_ltc_adaptor_signature' ? 'LTC' : 'ROD';
+			if (!verifyRemoteAdaptorSignature(sess, adaptorChainCode, p.hex)) {
+				slog(env.swapId, '✗ Rejected remote ' + adaptorChainCode + ' adaptor signature that failed verification');
+				return;
+			}
+			sess[adaptorSignatureKey(adaptorChainCode, 'remote')] = p.hex;
 			sess.remoteAdaptorSignature = p.hex;
-			slog(env.swapId, '← Remote adaptor sig');
+			ensureClaimSignatureFromAdaptor(sess, adaptorChainCode);
+			maybeAdvanceSignatureExchange(sess);
+			slog(env.swapId, '← Remote ' + adaptorChainCode + ' adaptor signature');
 			ENGINE.saveLive(sess);
 		}
 		if ((env.type.indexOf('normal_signature') > -1) && (p.hex || p.signature) && !isLocalEcho(sess, eventObject)) {
 			var sig = p.hex || p.signature;
+			var normalChainCode = env.type === 'swap_ltc_normal_signature' ? 'LTC' : 'ROD';
 			sess.remoteNormalSignature = sig;
-			if (env.type === 'swap_ltc_normal_signature') sess.remoteLtcClaimSignature = sig;
-			if (env.type === 'swap_rod_normal_signature') sess.remoteRodClaimSignature = sig;
-			slog(env.swapId, '← Remote normal sig');
+			if (normalChainCode === 'LTC') sess.remoteLtcNormalSignature = sig;
+			if (normalChainCode === 'ROD') sess.remoteRodNormalSignature = sig;
+			maybeAdvanceSignatureExchange(sess);
+			slog(env.swapId, '← Remote ' + normalChainCode + ' ordinary signature');
 			ENGINE.saveLive(sess);
 			shareReadyClaimSignatures(sess);
 		}
@@ -1689,7 +1984,8 @@ $(function () {
 			shareReadyClaimSignatures(sess);
 			autoContinueSwap(sess);
 		}
-		if (env.type === 'swap_ltc_claimed' && !isLocalEcho(sess, eventObject)) {
+			if (env.type === 'swap_ltc_claimed' && !isLocalEcho(sess, eventObject)) {
+			persistAliceAdaptorState(sess, '✓ Backfilled Alice adaptor point from completed LTC claim evidence');
 			sess.execution = sess.execution || {}; sess.execution.ltcClaim = p;
 			try { SWAP.safeAdvance(sess, 'LTC_CLAIMED', 'Remote LTC claim evidence'); } catch (e3) {}
 			slog(env.swapId, '← LTC claimed evidence'); ENGINE.saveLive(sess);
@@ -1700,11 +1996,13 @@ $(function () {
 			slog(env.swapId, '← Secret recovery evidence'); ENGINE.saveLive(sess);
 		}
 		if (env.type === 'swap_rod_claimed' && !isLocalEcho(sess, eventObject)) {
+			persistAliceAdaptorState(sess, '✓ Backfilled Alice adaptor point from completed ROD claim evidence');
 			sess.execution = sess.execution || {}; sess.execution.rodClaim = p;
 			try { SWAP.safeAdvance(sess, 'ROD_CLAIMED', 'Remote ROD claim evidence'); } catch (e5) {}
 			slog(env.swapId, '← ROD claimed evidence'); ENGINE.saveLive(sess);
 		}
 		if (env.type === 'swap_complete' && !isLocalEcho(sess, eventObject)) {
+			persistAliceAdaptorState(sess, '✓ Backfilled Alice adaptor point before completed-session save');
 			sess.state = 'COMPLETE'; ENGINE.saveLive(sess);
 			ENGINE.recordTrade(sess);
 			slog(env.swapId, '✓ COMPLETE');
@@ -1745,9 +2043,14 @@ $(function () {
 		try {
 			var y = ENGINE.recoverSecret(Crypto.util.hexToBytes(sess.localAdaptorSignature), csig, sess.adaptorPoint);
 			sess.recoveredAdaptorSecret = y;
+			if (!sess.adaptorPoint) {
+				sess.adaptorPoint = coinjs.adaptor.publicKey(y);
+				slog(sess.swapId, '✓ Backfilled Bob adaptor point from recovered secret');
+			}
 			slog(sess.swapId, '✓ Secret recovered from Alice LTC claim');
-			if (sess.remoteAdaptorSignature) {
-				var comp = ENGINE.completeSig(Crypto.util.hexToBytes(sess.remoteAdaptorSignature), y);
+			var remoteRodAdaptorSignature = sess.remoteRodAdaptorSignature || sess.remoteAdaptorSignature;
+			if (remoteRodAdaptorSignature) {
+				var comp = ENGINE.completeSig(Crypto.util.hexToBytes(remoteRodAdaptorSignature), y);
 				sess.remoteRodClaimSignature = comp;
 				slog(sess.swapId, '✓ ROD claim signature completed; Bob can now claim ROD');
 				if (ENGINE.pool) ENGINE.publishSwapMessage(sess, 'swap_secret_recovered', { recovered: true });

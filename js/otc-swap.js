@@ -399,7 +399,7 @@
 		};
 	};
 
-		swapModule.testFixtures = function(){
+	swapModule.testFixtures = function(){
 		var fixtures = swapModule.validationFixtures();
 		var recomputedTerms = swapModule.buildTerms({
 			swapId: fixtures.swapId,
@@ -448,6 +448,71 @@
 			name: 'ROD name helper adapter',
 			passed: result && result.unavailable === true && jsonValidationPassed,
 			response: result
+		};
+	};
+
+	swapModule.testAdaptorSettlementFlow = function(){
+		var fixtures = swapModule.validationFixtures();
+		var engine = root.engine;
+		if(!engine || !engine.buildClaimTxFromFunding || !engine.makeAdaptorSig || !engine.recoverSecret){
+			return {
+				name: 'Adaptor-gated OTC settlement flow',
+				passed: false,
+				error: 'Settlement engine is unavailable for adaptor validation'
+			};
+		}
+		var adaptorSecret = coinjs.adaptor.generateSecret();
+		var adaptorPoint = coinjs.adaptor.publicKey(adaptorSecret);
+		var aliceSession = {
+			role: 'alice',
+			swapId: fixtures.swapId,
+			terms: fixtures.terms,
+			localChildPrivateKey: fixtures.aliceKeys.privateKeyHex,
+			adaptorSecret: adaptorSecret,
+			adaptorPoint: adaptorPoint,
+			execution: {
+				rodFunding: { txid: '11'.repeat(32), vout: 0, amount: fixtures.terms.rodAmount, value: CHAINS.decimalToSats(fixtures.terms.rodAmount) },
+				ltcFunding: { txid: '22'.repeat(32), vout: 1, amount: fixtures.terms.ltcAmount, value: CHAINS.decimalToSats(fixtures.terms.ltcAmount) }
+			}
+		};
+		var bobSession = {
+			role: 'bob',
+			swapId: fixtures.swapId,
+			terms: fixtures.terms,
+			localChildPrivateKey: fixtures.bobKeys.privateKeyHex,
+			adaptorPoint: adaptorPoint,
+			execution: {
+				rodFunding: { txid: '11'.repeat(32), vout: 0, amount: fixtures.terms.rodAmount, value: CHAINS.decimalToSats(fixtures.terms.rodAmount) },
+				ltcFunding: { txid: '22'.repeat(32), vout: 1, amount: fixtures.terms.ltcAmount, value: CHAINS.decimalToSats(fixtures.terms.ltcAmount) }
+			}
+		};
+		var ltcClaim = engine.buildClaimTxFromFunding('LTC', aliceSession.execution.ltcFunding, fixtures.terms.ltcFunding.redeemScript, fixtures.terms.sellerLtcPayoutAddress, '0.00001000');
+		var rodClaim = engine.buildClaimTxFromFunding('ROD', bobSession.execution.rodFunding, fixtures.terms.rodFunding.redeemScript, fixtures.terms.buyerRodPayoutAddress, '0.00051900');
+		var ltcAdaptor = engine.makeAdaptorSig(bobSession, ltcClaim);
+		var rodAdaptor = engine.makeAdaptorSig(aliceSession, rodClaim);
+		var ltcVerified = coinjs.adaptor.verify({
+			messageHash: engine.sighash(ltcClaim),
+			signingPublicKey: fixtures.bobKeys.publicKey,
+			adaptorPublicKey: adaptorPoint,
+			adaptorSignature: ltcAdaptor.bytes
+		});
+		var rodVerified = coinjs.adaptor.verify({
+			messageHash: engine.sighash(rodClaim),
+			signingPublicKey: fixtures.aliceKeys.publicKey,
+			adaptorPublicKey: adaptorPoint,
+			adaptorSignature: rodAdaptor.bytes
+		});
+		var completedLtcSignature = engine.completeSig(ltcAdaptor.bytes, adaptorSecret);
+		var recoveredSecret = engine.recoverSecret(ltcAdaptor.bytes, completedLtcSignature, adaptorPoint);
+		var completedRodSignature = engine.completeSig(rodAdaptor.bytes, recoveredSecret);
+		return {
+			name: 'Adaptor-gated OTC settlement flow',
+			passed: ltcVerified && rodVerified && recoveredSecret === adaptorSecret && !!completedLtcSignature && !!completedRodSignature,
+			ltcVerified: ltcVerified,
+			rodVerified: rodVerified,
+			recoveredSecretMatches: recoveredSecret === adaptorSecret,
+			completedLtcSignature: completedLtcSignature,
+			completedRodSignature: completedRodSignature
 		};
 	};
 
@@ -633,7 +698,8 @@
 			STORAGE.testPersistence(),
 			NOSTR.testValidation(),
 			swapModule.testNameAdapterUnconfigured(),
-			swapModule.testFixtures()
+			swapModule.testFixtures(),
+			swapModule.testAdaptorSettlementFlow()
 		];
 		var passed = true;
 		for(var index = 0; index < results.length; index++){

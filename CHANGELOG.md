@@ -6,6 +6,24 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
 
 ## [Unreleased]
 
+### Changed (2026-07-19 — OTC counterparty identity payout resolution)
+- New swap in [`js/otc-app-ui.js`](js/otc-app-ui.js:828) now resolves the hidden counterparty payout destination from Dashboard order data, direct chain-address peers, or [`ENGINE.nameLookup()`](js/otc-engine.js:264) identity records before [`#nsCreate`](js/otc-app-ui.js:1698) starts a swap, so settlement terms bind to the counterparty identity instead of a manually entered visible payout field.
+
+### Fixed (2026-07-19 — OTC counterparty identity payout resolution)
+- Hardened the async payout-resolution path in [`maybeResolveCounterpartyPayoutAddress()`](js/otc-app-ui.js:828) and [`#nsCreate`](js/otc-app-ui.js:1698): stale lookup tokens now reject instead of reusing a newer hidden payout value, and payout-resolution failures now use rejected Deferred flows instead of `throw` inside jQuery async callbacks.
+
+### Verification (2026-07-19 — OTC counterparty identity payout resolution)
+- Focused structural verification confirmed the hidden payout field, identity-resolution promise path, stale-lookup rejection path, and rejected-promise create guard in [`js/otc-app-ui.js`](js/otc-app-ui.js:828).
+
+### Changed (2026-07-18 — adaptor-gated OTC settlement)
+- Implemented the intended adaptor-gated OTC settlement path in [`js/otc-app-ui.js`](js/otc-app-ui.js): role-specific sequencing now centers on [`shareClaimSignature()`](js/otc-app-ui.js:1191), remote adaptor signatures are verified in [`verifyRemoteAdaptorSignature()`](js/otc-app-ui.js:658), completed claim signatures are derived through [`ensureClaimSignatureFromAdaptor()`](js/otc-app-ui.js:671), readiness is constrained by [`claimReady()`](js/otc-app-ui.js:704) and [`rodClaimReady()`](js/otc-app-ui.js:714), signature exchange advances through [`maybeAdvanceSignatureExchange()`](js/otc-app-ui.js:686), completed counterparty signatures are published from [`buildClaim()`](js/otc-app-ui.js:1253), and Bob persists the recovered-secret-derived ROD claim signature in [`tryRecover()`](js/otc-app-ui.js:1858).
+
+### Verification (2026-07-18 — adaptor-gated OTC settlement)
+- Deterministic browser-context validation now includes [`swapModule.testAdaptorSettlementFlow()`](js/otc-swap.js:454), wired into [`rodOtc.validation.runAll()`](js/otc-swap.js:694); the Settings runner reported `All passed ✓`, both adaptor signatures verified, Bob could not reach ROD-claim readiness before LTC claim plus secret recovery, and [`git diff --check`](js/otc-app-ui.js:1) stayed clean for [`js/otc-app-ui.js`](js/otc-app-ui.js) and [`js/otc-swap.js`](js/otc-swap.js).
+
+### Documentation
+- Refreshed Carbon Memory and durable OTC maintainer notes to replace the previous ordinary-signature divergence with the implemented adaptor-gated settlement flow, while preserving a residual warning about possible live-event interleaving around [`maybeAdvanceSignatureExchange()`](js/otc-app-ui.js:686), [`shareClaimSignature()`](js/otc-app-ui.js:1191), [`buildClaim()`](js/otc-app-ui.js:1253), and [`tryRecover()`](js/otc-app-ui.js:1858).
+
 ### Fixed (2026-07-18 — LTC tx creation/validation & swap workflow hardening)
 - **Satoshi/coin unit handling (critical, LTC-breaking):** [`js/otc-engine.js`](js/otc-engine.js) treated any numeric amount ≤ 21,000,000 as coin-denominated and multiplied by 1e8. Esplora (litecoinspace.org) returns satoshis, so every LTC UTXO/output below 0.21 LTC was inflated 1e8-fold — LTC funding construction produced `bad-txns-in-belowout` transactions, funding verification reported "output not found", and claim amounts were astronomically wrong. Units are now explicit: UTXO and evidence values are always satoshis; `findFundingOutput()` decides by `apiType` (esplora = sats, ROD `/transaction` = Core-style coin floats); `buildClaimTxFromFunding()` prefers satoshi `value` evidence over the decimal `amount` string.
 - **Nostr self-echo overwrote counterparty signatures (claim-breaking):** relays replay a client's own events (always after a reload, when the in-memory dedup cache is empty). The `swap_*_normal_signature` handlers stored the echoed local signature in the `remote*` slots, assembling a 2-of-2 scriptSig with the same signature twice — guaranteed `OP_CHECKMULTISIG` failure at broadcast. Own event IDs are now marked seen at publish time in `publishSwapMessage()`, and all signature/claim/complete handlers ignore events authored by the local Nostr pubkey.

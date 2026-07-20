@@ -1,0 +1,222 @@
+{
+  "scenario": "happy",
+  "swapId": "6fda859c601a92bf90d4d8667d44881dbf6f7ab019cfcde12e1a758959e17e28",
+  "steps": [
+    {
+      "name": "alice: in-page OTC validation suite",
+      "ok": true,
+      "detail": "ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok"
+    },
+    {
+      "name": "bob: in-page OTC validation suite",
+      "ok": true,
+      "detail": "ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok"
+    },
+    {
+      "name": "both pages connected to local Nostr relay",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "swap accounts derived (both)",
+      "ok": true,
+      "detail": "bob xpub xqTYSG7VWMaY…"
+    },
+    {
+      "name": "alice created swap session",
+      "ok": true,
+      "detail": "swapId 6fda859c601a92bf…"
+    },
+    {
+      "name": "terms include refund heights + confirmations + 5-field swapId nonce",
+      "ok": true,
+      "detail": "{\"refundRodHeight\":500030,\"ltcRefundLockHeight\":500040,\"rodConfirmations\":1,\"ltcConfirmations\":1,\"sellerRodRefundAddress\":\"R9cWxipPfwMbH1UV1NiJGmCsGHNCyGDG8J\",\"buyerLtcRefundAddress\":\"Le7Z2TX5HMMzmqm5fSZwcGKMh87wfvCwrg\",\"nonce\":\"3e0a4f481a813b58a67a743fe7bac72f\"}"
+    },
+    {
+      "name": "bob auto-created session from incoming terms",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "bob accepted",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "alice accepted",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "refund locktimes match terms",
+      "ok": true,
+      "detail": "ROD refund locks at 500030, LTC refund locks at 500040"
+    },
+    {
+      "name": "ROD funding tx broadcast & independently validated",
+      "ok": true,
+      "detail": "input 0: P2PKH signature valid (pubkey 027311db691635c1…) | fee 51900 sats over 224 bytes (231.70 sat/B)"
+    },
+    {
+      "name": "ROD funding txid equals PLANNED txid (refunds/adaptor sigs bind to it)",
+      "ok": true,
+      "detail": "c140a143d572d079… vs planned c140a143d572d079…"
+    },
+    {
+      "name": "pre-signed ROD refund rejected as non-final before lock height",
+      "ok": true,
+      "detail": "non-final: locktime 500030 > height 500000"
+    },
+    {
+      "name": "timeline: PREPARED precedes ROD funding broadcast",
+      "ok": true,
+      "detail": "OPEN → NEGOTIATING → BILATERAL_READY → TERMS_ACCEPTED → REFUNDS_READY → SIGNATURES_EXCHANGED → PREPARED → ALICE_ROD_FUNDED"
+    },
+    {
+      "name": "LTC funding tx broadcast & independently validated (0.05 LTC < 0.21 LTC)",
+      "ok": true,
+      "detail": "input 0: P2PKH signature valid (pubkey 03ed22e7e66917f3…) | fee 1000 sats over 224 bytes (4.46 sat/B)"
+    },
+    {
+      "name": "LTC funding txid equals PLANNED txid",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "after reload: adaptor sig, refund and secret persisted",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "LTC claim tx (2-of-2 P2SH, completed adaptor sig) broadcast & independently validated",
+      "ok": true,
+      "detail": "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 1000 sats over 302 bytes (3.31 sat/B)"
+    },
+    {
+      "name": "recovered secret verifies against adaptor point (yG == Y)",
+      "ok": true,
+      "detail": "state COMPLETE"
+    },
+    {
+      "name": "ROD claim tx (2-of-2 P2SH, completed adaptor sig) broadcast & independently validated",
+      "ok": true,
+      "detail": "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 51900 sats over 303 bytes (171.29 sat/B)"
+    },
+    {
+      "name": "bob session COMPLETE",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "alice session COMPLETE",
+      "ok": true,
+      "detail": "COMPLETE"
+    },
+    {
+      "name": "alice received LTC at her payout address",
+      "ok": true,
+      "detail": "4999000 sats at LLBCMjHH1GERoZCcp1vkH7q5iQxzh5T6EM"
+    },
+    {
+      "name": "bob received ROD at his payout address",
+      "ok": true,
+      "detail": "9999948100 sats at RNNTSgGzDpc9dJYj6RpjS3igPER3eDBHE9"
+    },
+    {
+      "name": "LTC multisig fully swept",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "ROD multisig fully swept",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "zero normal-signature messages on relay (settlement fully adaptor-based)",
+      "ok": true,
+      "detail": "message types seen: swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_rod_funding_planned, swap_ltc_funding_planned, swap_rod_refund_signature, swap_ltc_refund_signature, swap_rod_adaptor_signature, swap_ltc_adaptor_signature, swap_prepared, swap_rod_funded, swap_ltc_funded, swap_ltc_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete"
+    },
+    {
+      "name": "zero invalid broadcast attempts (ROD)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "zero invalid broadcast attempts (LTC)",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "rodBroadcasts": [
+    {
+      "txid": "c140a143d572d0798d54e43131212077b31142db3f681254b85c326bb25374ab",
+      "hex": "0100000001dcfff71aefbd8d54bfa5bd9e62148c86c1775a242b6f8bd751cc8616c6b92074000000006b483045022100a5e02f140c9c5c9385c68cc54357c6e4f390d165dbc25ec1069321c736e82e900220394234347dab97630fce67b5c1333cf461407db8825dde7ce6faae61431ebe310121027311db691635c126f4654d0d2aa7ecc79cee39b22ebcd05856b2774a63a35127ffffffff0200e40b540200000017a9145c4e3be1afa7d4ecae750a2f6112d2ababb2b306874421e13c2c0000001976a9140a72a4d740133b3ca0064c77b55644bb1ac225a688ac00000000",
+      "valid": true,
+      "details": [
+        "input 0: P2PKH signature valid (pubkey 027311db691635c1…)",
+        "fee 51900 sats over 224 bytes (231.70 sat/B)"
+      ]
+    },
+    {
+      "txid": "c7c25f311028fcfec957afab2b921a989525439153c724f22dc6ad179d8afacf",
+      "hex": "0100000001ab7453b26b325cb85412683fdb4211b37720213131e4548d79d072d543a140c100000000da00473044022021a4e5139aa62629c8e77a2b84ee35c3f9078d8759dbfc08badd6be1e6c3a0c202207007c0cbc48d28eb5b00b9190bfab1e0347ae29fd58a30bc404b491f4706f46501483045022100d96998a351045b8b04b2dce31ac2417981f403c2c67b06d9780636d646d8441a0220368cd4f1d0ac66b4c88ac804a1df5e23ec2f4a980b6fa20f8b63a24478195a0401475221030b70c68c0612d1abe49ac5a53c96f626527d7112582d3216c52d54461f9049012103e03df9205f6a904ad49b6b396c2cf118897400796f1671070e4b0e43886f662952aeffffffff0144190b54020000001976a9148f988a7ae73f1d73a8707586c8f11f155041ba8988ac00000000",
+      "valid": true,
+      "details": [
+        "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)",
+        "fee 51900 sats over 303 bytes (171.29 sat/B)"
+      ]
+    }
+  ],
+  "ltcBroadcasts": [
+    {
+      "txid": "5faf8b9692dba5b36cdb86c7532108a7398d7b5ae4a7fcef2156651a9e747894",
+      "hex": "010000000109f15090715261fdbd122d1acafee61f11f4f8ead41de12fc61ed4c7b9d5e2b2000000006b483045022100ec311b26cee1b56995a89c0b57129f0b39654eebe25d81fad8a4259e04b17a720220694a3037a0787f545aa3d29d01adc7eaea6e99a03e5368ae2da6541bcc85f91d012103ed22e7e66917f360b0cd3eb730a25c6c3e3e188b48e249a76c2ecc9737ed83f2ffffffff02404b4c000000000017a9145c4e3be1afa7d4ecae750a2f6112d2ababb2b30687d8dde400000000001976a9148f988a7ae73f1d73a8707586c8f11f155041ba8988ac00000000",
+      "valid": true,
+      "details": [
+        "input 0: P2PKH signature valid (pubkey 03ed22e7e66917f3…)",
+        "fee 1000 sats over 224 bytes (4.46 sat/B)"
+      ]
+    },
+    {
+      "txid": "5301805c1e6cc0fd8f20fbbe8e5e548c1ee9434c9f6b92211a6af03682c28980",
+      "hex": "01000000019478749e1a655621effca7e45a7b8d39a7082153c786db6cb3a5db92968baf5f00000000d9004730440220482b0706bbdc60ca0cd7a14e4b664826f78650d693750ef53313ad2d63a6b13d02201599702698a588f034591ef07ebfe8d746524d74ea6bf2650018d6420820c1de0147304402206af27eaf87d6dad196ac91f4d8cbb76ed38c0f374bc520ed8cff044b36baea86022064075af24d6ca4db27a7f7ee2962847f81427e89a9c575a8c6fd4cc2aeedd72c01475221030b70c68c0612d1abe49ac5a53c96f626527d7112582d3216c52d54461f9049012103e03df9205f6a904ad49b6b396c2cf118897400796f1671070e4b0e43886f662952aeffffffff0158474c00000000001976a9140a72a4d740133b3ca0064c77b55644bb1ac225a688ac00000000",
+      "valid": true,
+      "details": [
+        "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)",
+        "fee 1000 sats over 302 bytes (3.31 sat/B)"
+      ]
+    }
+  ],
+  "relayEventTypes": [
+    "swap_terms",
+    "swap_adaptor_point",
+    "swap_ready",
+    "swap_ready",
+    "swap_accept",
+    "swap_accept",
+    "swap_rod_funding_planned",
+    "swap_ltc_funding_planned",
+    "swap_rod_refund_signature",
+    "swap_ltc_refund_signature",
+    "swap_ltc_refund_signature",
+    "swap_rod_refund_signature",
+    "swap_rod_adaptor_signature",
+    "swap_ltc_adaptor_signature",
+    "swap_prepared",
+    "swap_prepared",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_ltc_funded",
+    "swap_ltc_funded",
+    "swap_ltc_claimed",
+    "swap_secret_recovered",
+    "swap_rod_claimed",
+    "swap_complete"
+  ]
+}

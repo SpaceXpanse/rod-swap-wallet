@@ -20,7 +20,18 @@
 		swap_ltc_claimed: true,
 		swap_secret_recovered: true,
 		swap_rod_claimed: true,
-		swap_complete: true
+		swap_complete: true,
+		/* Pre-funding protocol: planned (signed, unbroadcast) funding txids,
+		   pre-signed timelocked refund exchange, and the PREPARED gate. */
+		swap_rod_funding_planned: true,
+		swap_ltc_funding_planned: true,
+		swap_rod_refund_signature: true,
+		swap_ltc_refund_signature: true,
+		swap_prepared: true,
+		/* Refund outcome notifications */
+		swap_rod_refund_broadcast: true,
+		swap_ltc_refund_broadcast: true,
+		swap_refunded: true
 	};
 
 	function canonicalEvent(eventObject){

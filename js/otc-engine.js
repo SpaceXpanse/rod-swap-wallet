@@ -18,7 +18,17 @@
 		ltcApiUrl: 'https://litecoinspace.org/api',
 		rpcUrl: '', rpcPort: '18080', rpcUser: '', rpcPass: '', rpcWallet: '',
 		relays: ['wss://relay.damus.io','wss://nos.lol','wss://relay.nostr.band'],
-		releaseBlocks: 20
+		releaseBlocks: 20,
+		/* Refund delays in native blocks of each chain. Alice (secret holder,
+		   funds ROD first) must refund LATER in wall time than Bob's LTC
+		   refund: ROD ~30s blocks × 480 ≈ 4h, LTC 2.5min × 24 ≈ 1h. */
+		refundRodBlocks: 480,
+		ltcRefundBlocks: 24,
+		/* Confirmation-count acceptance gates */
+		rodConfirmations: 1,
+		ltcConfirmations: 1,
+		/* Automation re-drive interval (ms); tests may lower this */
+		tickMs: 30000
 	};
 	engine.defaults = defaults;
 	/* Shallow merge + explicit array replace.
@@ -132,6 +142,20 @@
 			var d = r.result || r;
 			return d.blocks || d.height || (d.info && d.info.blocks) || 0;
 		});
+	};
+	/* Esplora: GET /blocks/tip/height returns the tip height as plain text */
+	engine.getLtcHeight = function () {
+		var d = $.Deferred();
+		$.ajax({ url: engine.loadConfig().ltcApiUrl + '/blocks/tip/height', method: 'GET', dataType: 'text' })
+			.then(function (body) {
+				var height = parseInt(String(body).replace(/[^0-9]/g, ''), 10);
+				if (!isFinite(height) || height <= 0) d.reject('Invalid LTC tip height: ' + body);
+				else d.resolve(height);
+			}, function (xhr) { d.reject('LTC tip height fetch failed (' + (xhr && xhr.status) + ')'); });
+		return d.promise();
+	};
+	engine.getChainHeight = function (cc) {
+		return cc === 'LTC' ? engine.getLtcHeight() : engine.getRodHeight();
 	};
 	/**
 	 * Resolve stored RPC settings to a display endpoint (no network I/O).
@@ -686,8 +710,10 @@
 	};
 	engine.findFundingOutput = function (cc, txid, expectedAddress, expectedAmount) {
 		var expectedSats = CHAINS.decimalToSats(expectedAmount);
-		return withChain(cc, function () {
+		var apiType = '';
+		var matched = withChain(cc, function () {
 			var expectedScript = scriptForAddress(expectedAddress);
+			apiType = coinjs.getNetwork().apiType;
 			/* Both the esplora and ROD /transaction/ endpoints return
 			   satoshi-denominated integer values.  The ROD API is NOT
 			   standard Bitcoin Core — it returns satoshis in /balance/,
@@ -729,6 +755,7 @@
 							amount: CHAINS.satsToDecimal(outputSats), value: outputSats,
 							address: expectedAddress, scriptPubKey: outScript,
 							confirmations: txData.confirmations || (txData.status && txData.status.confirmed ? 1 : 0),
+							_esploraBlockHeight: (txData.status && txData.status.block_height) || 0,
 							verifiedAt: new Date().toISOString()
 						};
 					}
@@ -737,6 +764,22 @@
 				} catch (verifyError) {
 					return $.Deferred().reject(verifyError).promise();
 				}
+			});
+		});
+		/* Esplora reports no confirmation count — derive a real one from the
+		   chain tip so confirmation gates work on LTC, not just ROD. */
+		return matched.then(function (evidence) {
+			if (apiType !== 'esplora' || !evidence._esploraBlockHeight) {
+				delete evidence._esploraBlockHeight;
+				return evidence;
+			}
+			return engine.getChainHeight(cc).then(function (tip) {
+				evidence.confirmations = Math.max(1, tip - evidence._esploraBlockHeight + 1);
+				delete evidence._esploraBlockHeight;
+				return evidence;
+			}, function () {
+				delete evidence._esploraBlockHeight;
+				return evidence; /* keep the 0/1 fallback on tip fetch failure */
 			});
 		});
 	};
@@ -841,6 +884,97 @@
 		});
 	};
 	engine.signClaimTx = function (cc, tx, wif) { return withChain(cc, function () { return tx.transactionSig(0, wif, 1); }); };
+	/* Timelocked refund spending the 2-of-2 funding output back to the
+	   original funder. nLockTime enforcement requires a non-final input
+	   sequence (0xfffffffe); the tx is then invalid until the chain reaches
+	   lockHeight. Both parties MUST construct this identically (same funding
+	   outpoint, destination, fee, lockHeight) or their sighashes diverge. */
+	engine.buildRefundTxFromFunding = function (cc, fundingEvidence, redeemScript, destinationAddress, feeDecimal, lockHeight) {
+		return withChain(cc, function () {
+			var amountSats = (fundingEvidence.value != null)
+				? normalizeAmountSats(fundingEvidence.value)
+				: CHAINS.decimalToSats(String(fundingEvidence.amount));
+			var feeSats = CHAINS.decimalToSats(feeDecimal || '0.00001000');
+			if (amountSats <= feeSats) throw new Error('Refund amount does not cover fee');
+			var height = parseInt(lockHeight, 10);
+			if (!isFinite(height) || height <= 0) throw new Error('Refund lock height is required');
+			var tx = coinjs.transaction();
+			tx.lock_time = height;
+			tx.addinput(fundingEvidence.txid, fundingEvidence.vout, redeemScript, 0xfffffffe);
+			tx.addoutput(destinationAddress, CHAINS.satsToDecimal(amountSats - feeSats));
+			return tx;
+		});
+	};
+	/* Raw tx hex: esplora GET /tx/:txid/hex (plain text); the ROD /transaction
+	   response includes a .hex field. Needed to extract the counterparty's
+	   completed signature from the REAL broadcast claim transaction. */
+	engine.getTxHex = function (cc, txid) {
+		return withChain(cc, function () {
+			var network = coinjs.getNetwork();
+			if (network.apiType === 'esplora') {
+				var d = $.Deferred();
+				$.ajax({ url: network.apiBase + '/tx/' + encodeURIComponent(txid) + '/hex', method: 'GET', dataType: 'text' })
+					.then(function (body) {
+						var hex = $.trim(String(body));
+						if (/^[0-9a-f]+$/i.test(hex)) d.resolve(hex);
+						else d.reject('Invalid tx hex response');
+					}, function (xhr) { d.reject('tx hex fetch failed (' + (xhr && xhr.status) + ')'); });
+				return d.promise();
+			}
+			return engine.getTransactionRaw(cc, txid).then(function (txData) {
+				if (txData && txData.hex) return txData.hex;
+				return $.Deferred().reject('ROD tx has no hex field').promise();
+			});
+		});
+	};
+	/* Esplora outpoint spend status: GET /tx/:txid/outspend/:vout →
+	   {spent:bool, txid?:hex}. Lets Bob discover Alice's LTC claim directly
+	   from the chain even if every Nostr relay drops the notification. */
+	engine.getOutspend = function (cc, txid, vout) {
+		return withChain(cc, function () {
+			var network = coinjs.getNetwork();
+			if (network.apiType !== 'esplora') return $.Deferred().reject('outspend only supported on esplora APIs').promise();
+			var d = $.Deferred();
+			coinjs.ajax(network.apiBase + '/tx/' + encodeURIComponent(txid) + '/outspend/' + vout, function (response) {
+				try { d.resolve(JSON.parse(response)); }
+				catch (e) { d.reject('Invalid outspend response'); }
+			}, 'GET');
+			return d.promise();
+		});
+	};
+	/* Is the funding outpoint still unspent? Used as the refund pre-check.
+	   Resolves {unspent:bool}. */
+	engine.isOutpointUnspent = function (cc, address, txid, vout) {
+		return engine.listUnspent(cc, address).then(function (response) {
+			var utxos = (response && response.data) || [];
+			for (var i = 0; i < utxos.length; i++) {
+				var utxoTxid = utxos[i].transaction_hash || utxos[i].txid || '';
+				var utxoVout = (typeof utxos[i].vout !== 'undefined') ? utxos[i].vout : utxos[i].index;
+				if (utxoTxid === txid && parseInt(utxoVout, 10) === parseInt(vout, 10)) return { unspent: true };
+			}
+			return { unspent: false };
+		});
+	};
+	/* Parse a P2SH 2-of-2 claim scriptSig [OP_0 <sigA> <sigB> <redeem>] out of
+	   a raw tx hex. Returns {signatures:[hexWithSighashByte,...], redeemScript}.
+	   Signature order matches the redeem-script pubkey order [alice, bob]. */
+	engine.extractMultisigScriptSigSigs = function (txhex) {
+		var parsed = coinjs.transaction().deserialize(txhex);
+		if (!parsed || !parsed.ins || !parsed.ins.length) throw new Error('Cannot parse claim transaction');
+		var chunks = parsed.ins[0].script.chunks || [];
+		var signatures = [];
+		var redeemScript = '';
+		for (var i = 0; i < chunks.length; i++) {
+			var chunk = chunks[i];
+			if (typeof chunk === 'number') continue; /* OP_0 etc. */
+			var hex = Crypto.util.bytesToHex(chunk);
+			/* DER signatures start 0x30; the final push is the redeem script */
+			if (i === chunks.length - 1) redeemScript = hex;
+			else if (chunk[0] === 0x30) signatures.push(hex);
+		}
+		if (!signatures.length) throw new Error('No signatures found in claim scriptSig');
+		return { signatures: signatures, redeemScript: redeemScript };
+	};
 	engine.applyMultisigSignatures = function (cc, tx, redeemScript, signatures) {
 		return withChain(cc, function () {
 			var script = coinjs.script();
@@ -862,8 +996,31 @@
 	engine.makeAdaptorSig = function (sess, tx) {
 		return coinjs.adaptor.encrypt({ messageHash: engine.sighash(tx), signingPrivateKey: sess.localChildPrivateKey, adaptorPublicKey: sess.adaptorPoint, auxiliaryRandomness: coinjs.newPrivkey() });
 	};
-	engine.completeSig = function (asig, secret) { return coinjs.adaptor.complete({ adaptorSignature: asig, adaptorSecret: secret }).hex; };
+	/* Completed signature must carry the SIGHASH_ALL byte to be valid in a
+	   scriptSig; adaptor.complete() returns bare DER. */
+	engine.completeSig = function (asig, secret) { return coinjs.adaptor.complete({ adaptorSignature: asig, adaptorSecret: secret }).hex + '01'; };
+	/* parseDER reads by DER length fields, so a trailing sighash byte on the
+	   completed signature (as extracted from a real scriptSig) is tolerated. */
 	engine.recoverSecret = function (asig, csig, Y) { return coinjs.adaptor.recover({ adaptorSignature: asig, completedSignature: Crypto.util.hexToBytes(csig), adaptorPublicKey: Y }); };
+	/* Verify a counterparty adaptor signature (DLEQ + pre-signature check)
+	   against the exact claim sighash before trusting it for settlement. */
+	engine.verifyAdaptorSig = function (sighashBytes, signerPubkeyHex, adaptorPointHex, adaptorSigHex) {
+		try {
+			return coinjs.adaptor.verify({
+				messageHash: sighashBytes,
+				signingPublicKey: signerPubkeyHex,
+				adaptorPublicKey: adaptorPointHex,
+				adaptorSignature: Crypto.util.hexToBytes(adaptorSigHex)
+			});
+		} catch (e) { return false; }
+	};
+	/* Verify a plain DER(+sighash byte) ECDSA signature against a sighash. */
+	engine.verifyDerSig = function (sighashBytes, signerPubkeyHex, derSigHex) {
+		try {
+			var decompressed = coinjs.pubkeydecompress(signerPubkeyHex) || signerPubkeyHex;
+			return coinjs.verifySignature(sighashBytes, Crypto.util.hexToBytes(derSigHex), Crypto.util.hexToBytes(decompressed));
+		} catch (e) { return false; }
+	};
 
 	/* ============ Persistent sessions ============ */
 	var LIVE = 'rodOtcLive';

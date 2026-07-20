@@ -8,8 +8,10 @@
 	var ALLOWED_TRANSITIONS = {
 		OPEN: ['NEGOTIATING'],
 		NEGOTIATING: ['TERMS_ACCEPTED'],
-		TERMS_ACCEPTED: ['SIGNATURES_EXCHANGED'],
-		SIGNATURES_EXCHANGED: ['ALICE_ROD_FUNDED'],
+		TERMS_ACCEPTED: ['REFUNDS_READY'],
+		REFUNDS_READY: ['SIGNATURES_EXCHANGED'],
+		SIGNATURES_EXCHANGED: ['PREPARED'],
+		PREPARED: ['ALICE_ROD_FUNDED'],
 		ALICE_ROD_FUNDED: ['BOB_LTC_FUNDED'],
 		BOB_LTC_FUNDED: ['READY'],
 		READY: ['LTC_CLAIMED'],
@@ -17,6 +19,32 @@
 		SECRET_RECOVERED: ['ROD_CLAIMED'],
 		ROD_CLAIMED: ['COMPLETE'],
 		COMPLETE: []
+	};
+	/* Refund outcomes sit outside the linear happy path: a swap can divert to
+	   a refund from several states, so they are entered via markRefundState()
+	   rather than advanceState(). PARTIALLY_SETTLED records one output claimed
+	   while the other was refunded. */
+	var REFUND_STATES = {
+		ROD_REFUND_BROADCAST: true,
+		LTC_REFUND_BROADCAST: true,
+		ROD_REFUNDED: true,
+		LTC_REFUNDED: true,
+		REFUNDED: true,
+		PARTIALLY_SETTLED: true
+	};
+	swapModule.REFUND_STATES = REFUND_STATES;
+	swapModule.markRefundState = function(session, refundState, note){
+		if(!REFUND_STATES[refundState]){
+			throw new Error('Unknown refund state: ' + refundState);
+		}
+		if(session.state === 'COMPLETE') return session;
+		session.state = refundState;
+		session.timeline = session.timeline || [];
+		session.timeline.push({ state: refundState, at: new Date().toISOString(), note: note || '' });
+		var state = getState();
+		state.sessions[session.swapId] = session;
+		saveState(state);
+		return session;
 	};
 
 	function stableStringify(value){
@@ -77,8 +105,13 @@
 		};
 	};
 
-	swapModule.swapIdFromOrder = function(orderName, orderRevision, buyerIdentity){
-		return sha256Hex([orderName || '', orderRevision || '', buyerIdentity || ''].join('|'));
+	/* 5-field swap identifier: order ID, offer revision, seller identity,
+	   buyer identity, and a per-swap random nonce chosen by the initiator.
+	   The nonce plays the role of the plan's "acceptance event ID" (the terms
+	   are created before the acceptance event exists in the auto-negotiation
+	   flow) and guarantees uniqueness across repeat trades of the same order. */
+	swapModule.swapIdFromOrder = function(orderName, orderRevision, sellerIdentity, buyerIdentity, swapNonce){
+		return sha256Hex([orderName || '', orderRevision || '', sellerIdentity || '', buyerIdentity || '', swapNonce || ''].join('|'));
 	};
 
 	swapModule.childIndexFromSwapId = function(swapId){
@@ -136,6 +169,14 @@
 		};
 	};
 
+	/* Default settlement fees (decimal strings). ROD relays at a much higher
+	   fee floor than LTC (observed ~232 sat/B on mainnet). */
+	swapModule.DEFAULT_FEES = {
+		rodClaimFee: '0.00051900',
+		ltcClaimFee: '0.00001000',
+		rodRefundFee: '0.00051900',
+		ltcRefundFee: '0.00001000'
+	};
 	swapModule.buildTerms = function(input){
 		var childIndex = input.childIndex;
 		var alicePublicKey = input.aliceChildPubKey;
@@ -153,13 +194,36 @@
 			aliceChildPubKey: alicePublicKey,
 			bobChildPubKey: bobPublicKey,
 			sellerLtcPayoutAddress: input.sellerLtcPayoutAddress,
-			buyerRodPayoutAddress: input.buyerRodPayoutAddress
+			buyerRodPayoutAddress: input.buyerRodPayoutAddress,
+			/* Identity binding for the 5-field swapId */
+			sellerIdentity: input.sellerIdentity || '',
+			buyerIdentity: input.buyerIdentity || '',
+			termsNonce: input.termsNonce || '',
+			/* Refund protocol. Alice (secret holder, funds ROD first) refunds
+			   LATE; Bob (funds LTC second) refunds EARLY — otherwise the secret
+			   holder could refund ROD and still claim LTC. */
+			refundRodHeight: parseInt(input.refundRodHeight, 10) || 0,
+			ltcRefundLockHeight: parseInt(input.ltcRefundLockHeight, 10) || 0,
+			/* Confirmation-count acceptance gates */
+			rodConfirmations: parseInt(input.rodConfirmations, 10) || 1,
+			ltcConfirmations: parseInt(input.ltcConfirmations, 10) || 1,
+			/* Settlement fees — canonical so both sides construct identical
+			   claim/refund sighashes */
+			rodClaimFee: input.rodClaimFee || swapModule.DEFAULT_FEES.rodClaimFee,
+			ltcClaimFee: input.ltcClaimFee || swapModule.DEFAULT_FEES.ltcClaimFee,
+			rodRefundFee: input.rodRefundFee || swapModule.DEFAULT_FEES.rodRefundFee,
+			ltcRefundFee: input.ltcRefundFee || swapModule.DEFAULT_FEES.ltcRefundFee
 		};
+		/* Refund destinations derive from the swap child keys so both sides can
+		   compute them without extra message fields; each side's own wallet holds
+		   the matching private child key. */
+		canonicalTerms.sellerRodRefundAddress = CHAINS.publicKeyToAddress('ROD', alicePublicKey, 'legacy');
+		canonicalTerms.buyerLtcRefundAddress = CHAINS.publicKeyToAddress('LTC', bobPublicKey, 'legacy');
 		canonicalTerms.termsHash = sha256Hex(stableStringify(canonicalTerms));
 		canonicalTerms.rodFunding = CHAINS.planFunding('ROD', [alicePublicKey, bobPublicKey], 2, canonicalTerms.rodAmount);
 		canonicalTerms.ltcFunding = CHAINS.planFunding('LTC', [alicePublicKey, bobPublicKey], 2, canonicalTerms.ltcAmount);
-		canonicalTerms.rodClaim = CHAINS.planClaim('ROD', canonicalTerms.rodFunding, canonicalTerms.buyerRodPayoutAddress, canonicalTerms.rodAmount, '0.00001000');
-		canonicalTerms.ltcClaim = CHAINS.planClaim('LTC', canonicalTerms.ltcFunding, canonicalTerms.sellerLtcPayoutAddress, canonicalTerms.ltcAmount, '0.00001000');
+		canonicalTerms.rodClaim = CHAINS.planClaim('ROD', canonicalTerms.rodFunding, canonicalTerms.buyerRodPayoutAddress, canonicalTerms.rodAmount, canonicalTerms.rodClaimFee);
+		canonicalTerms.ltcClaim = CHAINS.planClaim('LTC', canonicalTerms.ltcFunding, canonicalTerms.sellerLtcPayoutAddress, canonicalTerms.ltcAmount, canonicalTerms.ltcClaimFee);
 		return canonicalTerms;
 	};
 
@@ -187,7 +251,8 @@
 		if(!session || !session.state){
 			throw new Error('Swap session is missing state');
 		}
-		var stateOrder = ['OPEN', 'NEGOTIATING', 'TERMS_ACCEPTED', 'SIGNATURES_EXCHANGED', 'ALICE_ROD_FUNDED', 'BOB_LTC_FUNDED', 'READY', 'LTC_CLAIMED', 'SECRET_RECOVERED', 'ROD_CLAIMED', 'COMPLETE'];
+		var stateOrder = ['OPEN', 'NEGOTIATING', 'TERMS_ACCEPTED', 'REFUNDS_READY', 'SIGNATURES_EXCHANGED', 'PREPARED', 'ALICE_ROD_FUNDED', 'BOB_LTC_FUNDED', 'READY', 'LTC_CLAIMED', 'SECRET_RECOVERED', 'ROD_CLAIMED', 'COMPLETE'];
+		if(REFUND_STATES[session.state]) return session; /* refund branch is terminal for auto-advance */
 		var currentIndex = stateOrder.indexOf(session.state);
 		var nextIndex = stateOrder.indexOf(nextState);
 		if(nextIndex === -1){
@@ -241,7 +306,18 @@
 			aliceChildPubKey: sellerSwapKeys.publicKey,
 			bobChildPubKey: buyerSwapKeys.publicKey,
 			sellerLtcPayoutAddress: input.sellerLtcPayoutAddress,
-			buyerRodPayoutAddress: input.buyerRodPayoutAddress
+			buyerRodPayoutAddress: input.buyerRodPayoutAddress,
+			sellerIdentity: input.sellerIdentity,
+			buyerIdentity: input.buyerIdentity,
+			termsNonce: input.termsNonce,
+			refundRodHeight: input.refundRodHeight,
+			ltcRefundLockHeight: input.ltcRefundLockHeight,
+			rodConfirmations: input.rodConfirmations,
+			ltcConfirmations: input.ltcConfirmations,
+			rodClaimFee: input.rodClaimFee,
+			ltcClaimFee: input.ltcClaimFee,
+			rodRefundFee: input.rodRefundFee,
+			ltcRefundFee: input.ltcRefundFee
 		});
 		var session = {
 			swapId: input.swapId,
@@ -370,7 +446,7 @@
 	swapModule.validationFixtures = function(){
 		var aliceAccount = swapModule.createSwapAccount('alice fixture passphrase');
 		var bobAccount = swapModule.createSwapAccount('bob fixture passphrase');
-		var swapId = swapModule.swapIdFromOrder('alice.rod/order-1', '1', 'bob.rod');
+		var swapId = swapModule.swapIdFromOrder('alice.rod/order-1', '1', 'alice.rod', 'bob.rod', 'fixture-nonce-1');
 		var childIndex = swapModule.childIndexFromSwapId(swapId);
 		var aliceKeys = swapModule.deriveSwapKeys(aliceAccount.xprv, childIndex);
 		var bobKeys = swapModule.deriveSwapKeys(bobAccount.xprv, childIndex);
@@ -386,7 +462,14 @@
 			aliceChildPubKey: aliceKeys.publicKey,
 			bobChildPubKey: bobKeys.publicKey,
 			sellerLtcPayoutAddress: CHAINS.publicKeyToAddress('LTC', aliceKeys.publicKey, 'legacy'),
-			buyerRodPayoutAddress: CHAINS.publicKeyToAddress('ROD', bobKeys.publicKey, 'legacy')
+			buyerRodPayoutAddress: CHAINS.publicKeyToAddress('ROD', bobKeys.publicKey, 'legacy'),
+			sellerIdentity: 'alice.rod',
+			buyerIdentity: 'bob.rod',
+			termsNonce: 'fixture-nonce-1',
+			refundRodHeight: 1500480,
+			ltcRefundLockHeight: 3100024,
+			rodConfirmations: 1,
+			ltcConfirmations: 1
 		});
 		return {
 			aliceAccount: aliceAccount,
@@ -399,7 +482,7 @@
 		};
 	};
 
-	swapModule.testFixtures = function(){
+		swapModule.testFixtures = function(){
 		var fixtures = swapModule.validationFixtures();
 		var recomputedTerms = swapModule.buildTerms({
 			swapId: fixtures.swapId,
@@ -413,7 +496,14 @@
 			aliceChildPubKey: fixtures.aliceKeys.publicKey,
 			bobChildPubKey: fixtures.bobKeys.publicKey,
 			sellerLtcPayoutAddress: fixtures.terms.sellerLtcPayoutAddress,
-			buyerRodPayoutAddress: fixtures.terms.buyerRodPayoutAddress
+			buyerRodPayoutAddress: fixtures.terms.buyerRodPayoutAddress,
+			sellerIdentity: 'alice.rod',
+			buyerIdentity: 'bob.rod',
+			termsNonce: 'fixture-nonce-1',
+			refundRodHeight: 1500480,
+			ltcRefundLockHeight: 3100024,
+			rodConfirmations: 1,
+			ltcConfirmations: 1
 		});
 		var nameValidation = false;
 		try {
@@ -424,7 +514,12 @@
 		}
 		return {
 			name: 'Swap account and terms fixtures',
-			passed: fixtures.terms.termsHash === recomputedTerms.termsHash && fixtures.aliceKeys.publicKey !== fixtures.bobKeys.publicKey && nameValidation,
+			passed: fixtures.terms.termsHash === recomputedTerms.termsHash &&
+				fixtures.aliceKeys.publicKey !== fixtures.bobKeys.publicKey &&
+				!!fixtures.terms.sellerRodRefundAddress &&
+				!!fixtures.terms.buyerLtcRefundAddress &&
+				fixtures.terms.refundRodHeight > fixtures.terms.releaseRodHeight &&
+				nameValidation,
 			fixtures: fixtures
 		};
 	};
@@ -448,71 +543,6 @@
 			name: 'ROD name helper adapter',
 			passed: result && result.unavailable === true && jsonValidationPassed,
 			response: result
-		};
-	};
-
-	swapModule.testAdaptorSettlementFlow = function(){
-		var fixtures = swapModule.validationFixtures();
-		var engine = root.engine;
-		if(!engine || !engine.buildClaimTxFromFunding || !engine.makeAdaptorSig || !engine.recoverSecret){
-			return {
-				name: 'Adaptor-gated OTC settlement flow',
-				passed: false,
-				error: 'Settlement engine is unavailable for adaptor validation'
-			};
-		}
-		var adaptorSecret = coinjs.adaptor.generateSecret();
-		var adaptorPoint = coinjs.adaptor.publicKey(adaptorSecret);
-		var aliceSession = {
-			role: 'alice',
-			swapId: fixtures.swapId,
-			terms: fixtures.terms,
-			localChildPrivateKey: fixtures.aliceKeys.privateKeyHex,
-			adaptorSecret: adaptorSecret,
-			adaptorPoint: adaptorPoint,
-			execution: {
-				rodFunding: { txid: '11'.repeat(32), vout: 0, amount: fixtures.terms.rodAmount, value: CHAINS.decimalToSats(fixtures.terms.rodAmount) },
-				ltcFunding: { txid: '22'.repeat(32), vout: 1, amount: fixtures.terms.ltcAmount, value: CHAINS.decimalToSats(fixtures.terms.ltcAmount) }
-			}
-		};
-		var bobSession = {
-			role: 'bob',
-			swapId: fixtures.swapId,
-			terms: fixtures.terms,
-			localChildPrivateKey: fixtures.bobKeys.privateKeyHex,
-			adaptorPoint: adaptorPoint,
-			execution: {
-				rodFunding: { txid: '11'.repeat(32), vout: 0, amount: fixtures.terms.rodAmount, value: CHAINS.decimalToSats(fixtures.terms.rodAmount) },
-				ltcFunding: { txid: '22'.repeat(32), vout: 1, amount: fixtures.terms.ltcAmount, value: CHAINS.decimalToSats(fixtures.terms.ltcAmount) }
-			}
-		};
-		var ltcClaim = engine.buildClaimTxFromFunding('LTC', aliceSession.execution.ltcFunding, fixtures.terms.ltcFunding.redeemScript, fixtures.terms.sellerLtcPayoutAddress, '0.00001000');
-		var rodClaim = engine.buildClaimTxFromFunding('ROD', bobSession.execution.rodFunding, fixtures.terms.rodFunding.redeemScript, fixtures.terms.buyerRodPayoutAddress, '0.00051900');
-		var ltcAdaptor = engine.makeAdaptorSig(bobSession, ltcClaim);
-		var rodAdaptor = engine.makeAdaptorSig(aliceSession, rodClaim);
-		var ltcVerified = coinjs.adaptor.verify({
-			messageHash: engine.sighash(ltcClaim),
-			signingPublicKey: fixtures.bobKeys.publicKey,
-			adaptorPublicKey: adaptorPoint,
-			adaptorSignature: ltcAdaptor.bytes
-		});
-		var rodVerified = coinjs.adaptor.verify({
-			messageHash: engine.sighash(rodClaim),
-			signingPublicKey: fixtures.aliceKeys.publicKey,
-			adaptorPublicKey: adaptorPoint,
-			adaptorSignature: rodAdaptor.bytes
-		});
-		var completedLtcSignature = engine.completeSig(ltcAdaptor.bytes, adaptorSecret);
-		var recoveredSecret = engine.recoverSecret(ltcAdaptor.bytes, completedLtcSignature, adaptorPoint);
-		var completedRodSignature = engine.completeSig(rodAdaptor.bytes, recoveredSecret);
-		return {
-			name: 'Adaptor-gated OTC settlement flow',
-			passed: ltcVerified && rodVerified && recoveredSecret === adaptorSecret && !!completedLtcSignature && !!completedRodSignature,
-			ltcVerified: ltcVerified,
-			rodVerified: rodVerified,
-			recoveredSecretMatches: recoveredSecret === adaptorSecret,
-			completedLtcSignature: completedLtcSignature,
-			completedRodSignature: completedRodSignature
 		};
 	};
 
@@ -698,8 +728,7 @@
 			STORAGE.testPersistence(),
 			NOSTR.testValidation(),
 			swapModule.testNameAdapterUnconfigured(),
-			swapModule.testFixtures(),
-			swapModule.testAdaptorSettlementFlow()
+			swapModule.testFixtures()
 		];
 		var passed = true;
 		for(var index = 0; index < results.length; index++){

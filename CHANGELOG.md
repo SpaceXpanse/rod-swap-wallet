@@ -4,25 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is inspired by Keep a Changelog and follows Semantic Versioning principles where practical.
 
+## [2.3.0-beta] - 2026-07-19 — Trustless settlement: timelocked refunds + adaptor signatures
+
+### Added (Critical — refund path)
+- **Pre-signed timelocked refund transactions on both chains** ([`js/otc-engine.js`](js/otc-engine.js) `buildRefundTxFromFunding`, [`js/otc-app-ui.js`](js/otc-app-ui.js)): each side now PLANS its funding transaction (signs it locally, does **not** broadcast), announces the planned txid, and both parties exchange verified signatures on nLockTime refund transactions (`sequence 0xfffffffe`) **before any coin touches a chain**. Alice's ROD refund locks late (`refundRodHeight`, default +480 ROD blocks), Bob's LTC refund locks early (`ltcRefundLockHeight`, default +24 LTC blocks) — the standard atomic-swap ordering that prevents the secret holder refunding one side and claiming the other. Refund destinations derive deterministically from the swap child keys.
+- **PREPARED gate**: funding broadcast is blocked until the local side holds its fully-signed refund, has countersigned the peer's refund, and has sent + verified both claim adaptor signatures. The timeline records `REFUNDS_READY → SIGNATURES_EXCHANGED → PREPARED` strictly before `ALICE_ROD_FUNDED`.
+- **Automated refund monitoring**: the automation tick checks lock heights and outpoint spend status and broadcasts the pre-signed refund when a stalled swap's lock height passes. New states: `ROD_REFUND_BROADCAST`, `LTC_REFUND_BROADCAST`, `ROD_REFUNDED`, `LTC_REFUNDED`, `REFUNDED`, `PARTIALLY_SETTLED`; new messages: `swap_rod/ltc_funding_planned`, `swap_rod/ltc_refund_signature`, `swap_prepared`, `swap_rod/ltc_refund_broadcast`, `swap_refunded`. A manual "Attempt refund" button complements the automation.
+
+### Changed (Critical — atomic settlement)
+- **Settlement is now adaptor-signature based end to end** (the normal-signature exchange path is removed): Bob adaptor-signs the LTC claim and Alice adaptor-signs the ROD claim (both encrypted to Alice's adaptor point `Y`, DLEQ-verified by the receiver against a self-built claim sighash). Alice claims LTC with her signature plus Bob's **completed** adaptor signature — mathematically revealing the secret `y` on-chain. Bob recovers `y` from the real broadcast signature (Nostr evidence or, as a chain fallback, esplora `outspend`/`hex` polling), verifies `yG == Y`, completes Alice's ROD adaptor signature, and claims ROD. No party can claim without enabling the counterparty's claim.
+- **Confirmation gating** (High): Bob broadcasts LTC funding only after the on-chain ROD funding **matches the planned txid** and reaches `terms.rodConfirmations`; Alice claims only after LTC funding reaches `terms.ltcConfirmations`. Esplora confirmations are now computed from the real chain tip (`/blocks/tip/height`).
+- **5-field swap ID** (Medium): `swapId = SHA256(orderId | revision | sellerIdentity | buyerIdentity | termsNonce)`; the receiver verifies the binding before creating a session. Terms additionally carry identities, nonce, refund heights, confirmation counts and canonical claim/refund fees (so both sides build byte-identical sighashes).
+
+### Fixed
+- **Ghost automation locks**: per-attempt locks were persisted inside the session object, so async callbacks saving stale copies resurrected cleared locks and could stall the refund monitor for the full staleness window. Locks are now in-memory per page run; `saveExecution` merges into the freshest stored session copy.
+- Out-of-order relay delivery of refund/adaptor messages can no longer deadlock the handshake: payloads are stashed and consumed by `processPendingProtocol()` from both handlers and the automation tick.
+- Completed adaptor signatures now carry the SIGHASH_ALL byte required in a scriptSig.
+
+### Verification (2026-07-19)
+- E2E harness (`tests/harness/`), three scenarios against fully-validating mock chains (bitcoinjs-lib sighash + noble secp256k1, **nLockTime finality**, min-relay fee, dust):
+  - **Happy path 27/27**: PREPARED before any broadcast (timeline-proven), funding txids match planned txids, pre-signed refund REJECTED as `non-final` before its lock height, LTC claim carries the completed adaptor signature, Bob's recovered secret satisfies `yG == Y`, both multisigs swept, zero normal-signature messages on the relay, zero invalid broadcasts.
+  - **Refund path 21/21**: confirmation gate holds (Bob never funds at 1/3 confs), Bob disappears, chain passes `refundRodHeight`, automation broadcasts the pre-signed refund (locktime + both CHECKMULTISIG signatures independently validated), funds return to Alice, state `REFUNDED`.
+  - **Reload resilience**: Alice reloads mid-swap after PREPARED; adaptor signature, signed refund and secret persist and the swap still completes.
+
 ## [Unreleased]
-
-### Changed (2026-07-19 — OTC counterparty identity payout resolution)
-- New swap in [`js/otc-app-ui.js`](js/otc-app-ui.js:828) now resolves the hidden counterparty payout destination from Dashboard order data, direct chain-address peers, or [`ENGINE.nameLookup()`](js/otc-engine.js:264) identity records before [`#nsCreate`](js/otc-app-ui.js:1698) starts a swap, so settlement terms bind to the counterparty identity instead of a manually entered visible payout field.
-
-### Fixed (2026-07-19 — OTC counterparty identity payout resolution)
-- Hardened the async payout-resolution path in [`maybeResolveCounterpartyPayoutAddress()`](js/otc-app-ui.js:828) and [`#nsCreate`](js/otc-app-ui.js:1698): stale lookup tokens now reject instead of reusing a newer hidden payout value, and payout-resolution failures now use rejected Deferred flows instead of `throw` inside jQuery async callbacks.
-
-### Verification (2026-07-19 — OTC counterparty identity payout resolution)
-- Focused structural verification confirmed the hidden payout field, identity-resolution promise path, stale-lookup rejection path, and rejected-promise create guard in [`js/otc-app-ui.js`](js/otc-app-ui.js:828).
-
-### Changed (2026-07-18 — adaptor-gated OTC settlement)
-- Implemented the intended adaptor-gated OTC settlement path in [`js/otc-app-ui.js`](js/otc-app-ui.js): role-specific sequencing now centers on [`shareClaimSignature()`](js/otc-app-ui.js:1191), remote adaptor signatures are verified in [`verifyRemoteAdaptorSignature()`](js/otc-app-ui.js:658), completed claim signatures are derived through [`ensureClaimSignatureFromAdaptor()`](js/otc-app-ui.js:671), readiness is constrained by [`claimReady()`](js/otc-app-ui.js:704) and [`rodClaimReady()`](js/otc-app-ui.js:714), signature exchange advances through [`maybeAdvanceSignatureExchange()`](js/otc-app-ui.js:686), completed counterparty signatures are published from [`buildClaim()`](js/otc-app-ui.js:1253), and Bob persists the recovered-secret-derived ROD claim signature in [`tryRecover()`](js/otc-app-ui.js:1858).
-
-### Verification (2026-07-18 — adaptor-gated OTC settlement)
-- Deterministic browser-context validation now includes [`swapModule.testAdaptorSettlementFlow()`](js/otc-swap.js:454), wired into [`rodOtc.validation.runAll()`](js/otc-swap.js:694); the Settings runner reported `All passed ✓`, both adaptor signatures verified, Bob could not reach ROD-claim readiness before LTC claim plus secret recovery, and [`git diff --check`](js/otc-app-ui.js:1) stayed clean for [`js/otc-app-ui.js`](js/otc-app-ui.js) and [`js/otc-swap.js`](js/otc-swap.js).
-
-### Documentation
-- Refreshed Carbon Memory and durable OTC maintainer notes to replace the previous ordinary-signature divergence with the implemented adaptor-gated settlement flow, while preserving a residual warning about possible live-event interleaving around [`maybeAdvanceSignatureExchange()`](js/otc-app-ui.js:686), [`shareClaimSignature()`](js/otc-app-ui.js:1191), [`buildClaim()`](js/otc-app-ui.js:1253), and [`tryRecover()`](js/otc-app-ui.js:1858).
 
 ### Fixed (2026-07-18 — LTC tx creation/validation & swap workflow hardening)
 - **Satoshi/coin unit handling (critical, LTC-breaking):** [`js/otc-engine.js`](js/otc-engine.js) treated any numeric amount ≤ 21,000,000 as coin-denominated and multiplied by 1e8. Esplora (litecoinspace.org) returns satoshis, so every LTC UTXO/output below 0.21 LTC was inflated 1e8-fold — LTC funding construction produced `bad-txns-in-belowout` transactions, funding verification reported "output not found", and claim amounts were astronomically wrong. Units are now explicit: UTXO and evidence values are always satoshis; `findFundingOutput()` decides by `apiType` (esplora = sats, ROD `/transaction` = Core-style coin floats); `buildClaimTxFromFunding()` prefers satoshi `value` evidence over the decimal `amount` string.

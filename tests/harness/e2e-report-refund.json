@@ -1,0 +1,200 @@
+{
+  "scenario": "refund",
+  "swapId": "c65b248884d769ada0b5890a0114ca233c2acfc4f636c77faab86f146d037a51",
+  "steps": [
+    {
+      "name": "alice: in-page OTC validation suite",
+      "ok": true,
+      "detail": "ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok"
+    },
+    {
+      "name": "bob: in-page OTC validation suite",
+      "ok": true,
+      "detail": "ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok"
+    },
+    {
+      "name": "both pages connected to local Nostr relay",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "swap accounts derived (both)",
+      "ok": true,
+      "detail": "bob xpub xqTYSG7VWMaY…"
+    },
+    {
+      "name": "alice created swap session",
+      "ok": true,
+      "detail": "swapId c65b248884d769ad…"
+    },
+    {
+      "name": "terms include refund heights + confirmations + 5-field swapId nonce",
+      "ok": true,
+      "detail": "{\"refundRodHeight\":500030,\"ltcRefundLockHeight\":500040,\"rodConfirmations\":3,\"ltcConfirmations\":1,\"sellerRodRefundAddress\":\"RBAsqUQNkU82P2rvnL23QrCVfRGYC6xvD5\",\"buyerLtcRefundAddress\":\"Lh9h4TJjBQVYAwXzytakDwJd3SmMgotMhc\",\"nonce\":\"528ec752f2ec6a8faf27cff34d6101dd\"}"
+    },
+    {
+      "name": "bob auto-created session from incoming terms",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "bob accepted",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "alice accepted",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "refund locktimes match terms",
+      "ok": true,
+      "detail": "ROD refund locks at 500030, LTC refund locks at 500040"
+    },
+    {
+      "name": "ROD funding tx broadcast & independently validated",
+      "ok": true,
+      "detail": "input 0: P2PKH signature valid (pubkey 02dbe86d1514aca5…) | fee 51900 sats over 223 bytes (232.74 sat/B)"
+    },
+    {
+      "name": "confirmation gate held: Bob did NOT fund LTC at 1/3 confirmations",
+      "ok": true,
+      "detail": "ltc broadcasts: 0"
+    },
+    {
+      "name": "pre-signed ROD refund rejected as non-final before lock height",
+      "ok": true,
+      "detail": "non-final: locktime 500030 > height 500000"
+    },
+    {
+      "name": "bob disappeared (context closed) after ROD funding",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "pre-signed ROD refund broadcast & independently validated (locktime + 2-of-2 sigs)",
+      "ok": true,
+      "detail": "locktime 500030 satisfied at height 500035 | input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 51900 sats over 304 bytes (170.72 sat/B)"
+    },
+    {
+      "name": "alice session reached refund state",
+      "ok": true,
+      "detail": "REFUNDED"
+    },
+    {
+      "name": "funds returned to Alice refund address (amount minus refund fee)",
+      "ok": true,
+      "detail": "9999948100 sats at RBAsqUQNkU82P2rvnL23QrCVfRGYC6xvD5"
+    },
+    {
+      "name": "ROD multisig fully swept by refund",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "zero invalid broadcast attempts (ROD)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "zero LTC broadcasts at all (Bob never funded)",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "rodBroadcasts": [
+    {
+      "txid": "f12b18038f3d2956c2119ad7d275714da2a44dcf4e2df0deaa4cbbd3a3cd8033",
+      "hex": "0100000001abf6ad09a6452f89d8e1e1b7fd6789ee2fbd2fc95a402823a1128faf2c701d3c000000006a47304402203638c8fa029d978c6c214a62c1bee32ae15ba5dfc1d0ee11736fc35a5f70efc2022059e93794ef88187d278db1dfb018084c8c42056558d9cb5169750a05e9a8afc9012102dbe86d1514aca5f7a356a1183d09abf9c28a3221006b35754c037d3b6e995579ffffffff0200e40b540200000017a9149f3ac680632e3288d305f91e488e2924adab3860874421e13c2c0000001976a9144daeea8235c84a5826096182e66ff6946a637a4488ac00000000",
+      "valid": true,
+      "details": [
+        "input 0: P2PKH signature valid (pubkey 02dbe86d1514aca5…)",
+        "fee 51900 sats over 223 bytes (232.74 sat/B)"
+      ]
+    },
+    {
+      "txid": "78c68a0a954381a824b746f7d223d5ab7e27ef3b9816fb664c15c6ad6a942de4",
+      "hex": "01000000013380cda3d3bb4caadef02d4ecf4da4a24d7175d2d79a11c256293d8f03182bf100000000db00483045022100d9ad99b0646a5363802e1501c3a8234247a8b0ae7218f161ebe7e5f7c29459390220543455a0bacd5e8b075bd717f63fd0804e91f45d6f37c4e27db1ddef8b800c0501483045022100e78fee585ba1f2c9d5b39995595959c078000b792afdf139dc4594ade154e29e022019da5d18186bc670ff35c5661f4258035b1600540fdd7e52459c27b40e5505e30147522103ef481525640035c5d81bc2e92c8139f75833ffe49d6a2fa36baa0e0e3db6ca702102f9f99870096175aac955475373bab61fc07ffc810ba9a2bf4bc8123aeb5ab58752aefeffffff0144190b54020000001976a91414be872deca925c9385377f720df0727cf57f37d88ac3ea10700",
+      "valid": true,
+      "details": [
+        "locktime 500030 satisfied at height 500035",
+        "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)",
+        "fee 51900 sats over 304 bytes (170.72 sat/B)"
+      ]
+    }
+  ],
+  "ltcBroadcasts": [],
+  "relayEventTypes": [
+    "swap_terms",
+    "swap_adaptor_point",
+    "swap_ready",
+    "swap_ready",
+    "swap_accept",
+    "swap_accept",
+    "swap_rod_funding_planned",
+    "swap_ltc_funding_planned",
+    "swap_rod_refund_signature",
+    "swap_ltc_refund_signature",
+    "swap_rod_refund_signature",
+    "swap_ltc_refund_signature",
+    "swap_ltc_adaptor_signature",
+    "swap_rod_adaptor_signature",
+    "swap_prepared",
+    "swap_prepared",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_funded",
+    "swap_rod_refund_broadcast",
+    "swap_refunded"
+  ]
+}

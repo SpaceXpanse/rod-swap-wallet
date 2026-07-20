@@ -7,7 +7,7 @@ release/
 .understand-anything/
 docs/maintainer-wiki
 docs/*.md
-test*
+#test*
 *.log
 tmp/
 temp/

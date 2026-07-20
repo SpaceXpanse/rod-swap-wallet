@@ -176,3 +176,10 @@ Screenshots and proof artifacts are available under [`proof/`](proof), including
 
 This project is derived from the browser-wallet lineage represented by [`coinbin`](README.md), but the current repository behavior should be understood through the SpaceXpanse ROD runtime, OTC modules, and repository-specific documentation linked above.
 
+## Licensing
+
+- Original Coinb.in-derived material in this repository remains under the MIT license in [`LICENSE`](LICENSE).
+- SpaceXpanse/ROD fork-specific additions are licensed under Apache License 2.0 in [`LICENSE-APACHE`](LICENSE-APACHE), unless a file states otherwise.
+- Repository distributions should preserve both [`LICENSE`](LICENSE) and [`LICENSE-APACHE`](LICENSE-APACHE) so the mixed licensing scope remains clear.
+- File-level SPDX headers and notices control more specific cases where present.
+

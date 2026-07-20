@@ -34,6 +34,7 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
 
 ### Documentation
 - Added concise Apache 2.0 SPDX/copyright notices to fork-specific safe-to-edit project files, while intentionally skipping original Coinb.in sources, vendored/minified or generated assets, binaries/media/fonts/PDFs, lockfiles, JSON artifacts without a safe comment strategy, and other comment-unsafe paths.
+- Added project-level mixed-license documentation with root [`LICENSE`](LICENSE) for inherited MIT material, root [`LICENSE-APACHE`](LICENSE-APACHE) for SpaceXpanse fork additions, and clarified repository licensing scope in [`README.md`](README.md).
 
 ### Fixed (2026-07-18 — LTC tx creation/validation & swap workflow hardening)
 - **Satoshi/coin unit handling (critical, LTC-breaking):** [`js/otc-engine.js`](js/otc-engine.js) treated any numeric amount ≤ 21,000,000 as coin-denominated and multiplied by 1e8. Esplora (litecoinspace.org) returns satoshis, so every LTC UTXO/output below 0.21 LTC was inflated 1e8-fold — LTC funding construction produced `bad-txns-in-belowout` transactions, funding verification reported "output not found", and claim amounts were astronomically wrong. Units are now explicit: UTXO and evidence values are always satoshis; `findFundingOutput()` decides by `apiType` (esplora = sats, ROD `/transaction` = Core-style coin floats); `buildClaimTxFromFunding()` prefers satoshi `value` evidence over the decimal `amount` string.

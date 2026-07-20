@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright (c) SpaceXpanse contributors */
+
 /*
  * End-to-end ROD↔LTC OTC swap proof.
  *

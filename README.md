@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright (c) SpaceXpanse contributors -->
+
 # rod-web-swap
 
 Static browser-based SpaceXpanse ROD wallet with an integrated experimental OTC swap engine.

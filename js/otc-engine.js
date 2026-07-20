@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright (c) SpaceXpanse contributors */
+
 /*
 	otc-engine.js — Phase 2 swap engine.
 	Namespace: window.rodOtc.engine

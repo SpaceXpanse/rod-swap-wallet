@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright (c) SpaceXpanse contributors */
+
 /**
  * ROD Core RPC CORS proxy (Node.js)
  *

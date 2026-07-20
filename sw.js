@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright (c) SpaceXpanse contributors */
+
 const STATIC_CACHE_VERSION = "rod-wallet-static-v2.3.0-beta2";
 /* NOTE: cache.addAll() rejects the whole install if ANY entry 404s.
    The previous list referenced ./otc-test.html (removed from the repo),

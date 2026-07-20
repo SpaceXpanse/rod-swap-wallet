@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright (c) SpaceXpanse contributors -->
+
 # OTC swap end-to-end proof harness
 
 Runs the real wallet (unmodified `index.html` + `js/`) in two headless Chromium

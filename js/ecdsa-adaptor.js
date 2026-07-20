@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright (c) SpaceXpanse contributors */
+
 (function(){
 	var root = window.rodOtc = window.rodOtc || {};
 	var ecdsaHelpers = coinjs.ecdsa;

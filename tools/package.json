@@ -2,6 +2,7 @@
   "name": "rod-rpc-cors-proxy",
   "version": "1.0.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Local CORS proxy for ROD Core JSON-RPC (browser wallet helper)",
   "main": "rod-rpc-cors-proxy.js",
   "bin": {

@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright (c) SpaceXpanse contributors */
+
 /*
  * Mock infrastructure for the ROD↔LTC OTC swap end-to-end proof.
  *  - MockChain: in-memory UTXO chain with FULL independent tx validation

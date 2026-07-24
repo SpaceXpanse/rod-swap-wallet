@@ -1,5 +1,8 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright (c) SpaceXpanse contributors */
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 SpaceXpanse
+ * Fork-specific OTC Nostr transport helpers for the SpaceXpanse ROD wallet.
+ */
 
 (function(){
 	var root = window.rodOtc = window.rodOtc || {};

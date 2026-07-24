@@ -1,7 +1,8 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright (c) SpaceXpanse contributors */
-
 /*
+	SPDX-License-Identifier: Apache-2.0
+	Copyright 2026 SpaceXpanse
+	Fork-specific OTC swap engine for the SpaceXpanse ROD wallet.
+
 	otc-engine.js — Phase 2 swap engine.
 	Namespace: window.rodOtc.engine
 */
@@ -936,13 +937,24 @@
 	engine.getOutspend = function (cc, txid, vout) {
 		return withChain(cc, function () {
 			var network = coinjs.getNetwork();
-			if (network.apiType !== 'esplora') return $.Deferred().reject('outspend only supported on esplora APIs').promise();
-			var d = $.Deferred();
-			coinjs.ajax(network.apiBase + '/tx/' + encodeURIComponent(txid) + '/outspend/' + vout, function (response) {
-				try { d.resolve(JSON.parse(response)); }
-				catch (e) { d.reject('Invalid outspend response'); }
-			}, 'GET');
-			return d.promise();
+			if (network.apiType === 'esplora') {
+				var d = $.Deferred();
+				coinjs.ajax(network.apiBase + '/tx/' + encodeURIComponent(txid) + '/outspend/' + vout, function (response) {
+					try { d.resolve(JSON.parse(response)); }
+					catch (e) { d.reject('Invalid outspend response'); }
+				}, 'GET');
+				return d.promise();
+			}
+			/* ROD (non-esplora) fallback: fetch the tx and check if the vout
+			   has a spentTxId or isSpent flag set by the REST API. */
+			return engine.getTransactionRaw(cc, txid).then(function (txData) {
+				var outputs = txData.vout || [];
+				var out = outputs[parseInt(vout, 10)];
+				if (!out) return { spent: false };
+				if (out.spentTxId) return { spent: true, txid: out.spentTxId };
+				if (out.isSpent) return { spent: true, txid: '' };
+				return { spent: false };
+			});
 		});
 	};
 	/* Is the funding outpoint still unspent? Used as the refund pre-check.

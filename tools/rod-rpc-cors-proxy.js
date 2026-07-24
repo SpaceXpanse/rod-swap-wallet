@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright (c) SpaceXpanse contributors */
-
 /**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 SpaceXpanse
+ * Fork-specific helper for the SpaceXpanse ROD wallet.
+ *
  * ROD Core RPC CORS proxy (Node.js)
  *
  * Browser static wallet → http://127.0.0.1:18080/... → ROD Core http://127.0.0.1:11999/...

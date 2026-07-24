@@ -1,5 +1,8 @@
-/* SPDX-License-Identifier: Apache-2.0 */
-/* Copyright (c) SpaceXpanse contributors */
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 SpaceXpanse
+ * Fork-specific OTC swap UI for the SpaceXpanse ROD wallet.
+ */
 
 $(function () {
 	'use strict';
@@ -93,34 +96,26 @@ $(function () {
 		'<div class="tab-pane" id="otcNew">',
 		'<div class="otc-panel">',
 		'<h4>Create swap / order</h4>',
-		'<p class="text-muted" style="font-size:12px;margin-top:0">Post an open <b>order</b> with your terms only, or <b>start a swap</b> after filling counterparty (or by taking an order on the Dashboard).</p>',
+		'<p class="text-muted" style="font-size:12px;margin-top:0">Post an open <b>order</b> with your terms, or <b>Take</b> an order on the Dashboard to start a swap directly.</p>',
 		'<div class="row"><div class="col-md-6">',
 		'<label>Your role</label><select id="nsRole" class="form-control"><option value="alice">I sell ROD for LTC</option><option value="bob">I buy ROD with LTC</option></select>',
 		'<label>ROD amount</label><input id="nsRod" class="form-control" value="1000.00000000">',
 		'<label>LTC amount</label><input id="nsLtc" class="form-control" value="5.00000000">',
-		'<label>Release ROD height <small id="nsHeightHint" class="text-muted"></small></label><input id="nsRelease" class="form-control" value="">',
-		'<label>ROD name for order <small class="text-muted">(written on Create order via name_register / name_update)</small></label>',
-		'<div class="input-group">',
-		'<input id="nsOrderName" class="form-control" placeholder="d/otc-swap/…" value="' + esc(localStorage.getItem('otcLastOrderName') || '') + '">',
-		'<span class="input-group-btn"><button class="btn btn-default" type="button" id="nsOrderNameGen" title="Generate name">Random</button></span>',
-		'</div>',
-		'<hr style="border-color:rgba(126,233,255,0.15)">',
-		'<label>Counterparty identity <small class="text-muted">(required to start a swap — leave empty to post an order)</small></label>',
-		'<input id="nsPeer" class="form-control" placeholder="bob.rod or address" autocomplete="off" value="">',
-		'<label>Counterparty swap xpub <small class="text-muted">(only auto-filled when you Take an order on Dashboard)</small></label>',
-		'<input id="nsPeerXpub" class="form-control" placeholder="xpub… / Ltub…" autocomplete="off" value="">',
-		'<label>Counterparty payout address <small class="text-muted">(buyer ROD address when you sell, seller LTC address when you buy)</small></label>',
-		'<input id="nsPeerPayoutAddr" class="form-control" placeholder="Counterparty settlement address" autocomplete="off" value="">',
+		'<label>Release ROD height <small id="nsHeightHint" class="text-muted"></small></label><input id="nsRelease" class="form-control" value="" readonly>',
+		'<input id="nsOrderName" type="hidden" value="">',
+		'<input id="nsPeer" type="hidden" value="">',
+		'<input id="nsPeerXpub" type="hidden" value="">',
+		'<input id="nsPeerPayoutAddr" type="hidden" value="">',
 		'<div style="margin-top:14px">',
 		'<button class="btn btn-default" id="nsCreateOrder" type="button">Create order</button> ',
-		'<button class="btn btn-primary" id="nsCreate" type="button">Create &amp; start swap</button>',
+		'<button class="btn btn-primary" id="nsCreate" type="button" style="display:none">Create &amp; start swap</button>',
 		'</div>',
 		'<p id="nsModeHint" class="text-muted" style="font-size:11px;margin-top:8px"></p>',
 		'<p id="nsPublishStatus" class="text-muted" style="font-size:11px;margin-top:4px"></p>',
 		'</div><div class="col-md-6">',
 		'<label>Your identity</label><input id="nsMyAddr" class="form-control" readonly>',
 		'<label>Your swap xpub</label><input id="nsMyXpub" class="form-control" readonly>',
-		'<label>Swap ID</label><input id="nsSwapId" class="form-control" readonly>',
+		'<input id="nsSwapId" type="hidden" value="">',
 		'<label>Offer JSON</label><textarea id="nsOffer" class="form-control otc-textarea" readonly style="min-height:140px"></textarea>',
 		'</div></div></div></div>',
 
@@ -387,7 +382,7 @@ $(function () {
 		$('#otcBookDetail').show();
 	});
 
-	/* Take offer → go to New swap and fill counterparty from the chosen order only */
+	/* Take offer → fill counterparty fields and immediately start the swap */
 	var nsPrefillFromOrder = false;
 	$(document).on('click', '.otcTakeOffer', function () {
 		var $b = $(this);
@@ -396,13 +391,14 @@ $(function () {
 		$('#nsLtc').val($b.data('ltc'));
 		$('#nsPeer').val($b.data('peer') || '');
 		$('#nsPeerXpub').val($b.data('xpub') || '');
-		$('#nsPeerPayoutAddr').val($b.data('side') === 'bid' ? ($b.data('buyerRodPayout') || '') : ($b.data('sellerLtcPayout') || ''));
+		/* Payout address = counterparty identity (same address) */
+		$('#nsPeerPayoutAddr').val($b.data('peer') || '');
 		if ($b.data('release')) $('#nsRelease').val($b.data('release'));
 		/* Taking an ask (sell) → you are buyer (bob); taking a bid → you are seller (alice) */
 		$('#nsRole').val($b.data('side') === 'bid' ? 'alice' : 'bob');
 		updateNsModeHint();
-		$('#otcNav a[href="#otcNew"]').tab('show');
-		flash('info', 'Order loaded from Dashboard — counterparty filled. Review and click Create & start swap.');
+		/* Directly start the swap instead of just showing the form */
+		$('#nsCreate').click();
 	});
 
 	/* ============ CONNECTIONS (RPC + Nostr) ============ */
@@ -679,6 +675,8 @@ $(function () {
 		$('#nsPeer').val('');
 		$('#nsPeerXpub').val('');
 		$('#nsPeerPayoutAddr').val('');
+		/* Regenerate random ROD name for the next order */
+		$('#nsOrderName').val('d/otc-swap/' + randomOrderNameSuffix());
 		nsPrefillFromOrder = false;
 		updateNsModeHint();
 	}
@@ -686,16 +684,15 @@ $(function () {
 	function updateNsModeHint() {
 		var peer = $.trim($('#nsPeer').val());
 		var xpub = $.trim($('#nsPeerXpub').val());
-		var payoutAddress = $.trim($('#nsPeerPayoutAddr').val());
-		if (peer && xpub && payoutAddress) {
+		if (peer && xpub) {
 			$('#nsModeHint').html(nsPrefillFromOrder
 				? 'Mode: <b>start swap</b> (counterparty loaded from Dashboard order).'
 				: 'Mode: <b>start swap</b> (counterparty entered manually).');
 		} else {
-			$('#nsModeHint').html('Mode: <b>create order</b> — counterparty fields incomplete. Use <b>Create order</b>, or Take an order on the Dashboard to fill counterparty and payout details.');
+			$('#nsModeHint').html('Mode: <b>create order</b> — counterparty fields incomplete. Take an order on the Dashboard to start a swap.');
 		}
 	}
-	$('#nsPeer, #nsPeerXpub, #nsPeerPayoutAddr').on('input change', updateNsModeHint);
+	$('#nsPeer, #nsPeerXpub').on('input change', updateNsModeHint);
 
 	function decimalToBaseUnits(value) {
 		var text = $.trim(value == null ? '' : String(value));
@@ -1444,12 +1441,47 @@ $(function () {
 	   LTC claim (revealing y in the real signature). Bob recovers y from that
 	   signature — via Nostr evidence or directly from the chain — completes
 	   Alice's ROD adaptor signature and claims ROD. */
+	function errorString(e) {
+		if (!e) return 'unknown error';
+		if (typeof e === 'string') return e;
+		if (e.message) return e.message;
+		if (e.statusText) return e.status + ' ' + e.statusText;
+		if (e.responseText) return e.responseText.substring(0, 200);
+		try { return JSON.stringify(e); } catch (_) { return String(e); }
+	}
+
 	function advanceSettlement(sess) {
 		var terms = sess.terms;
 		var execution = sess.execution || {};
 		if (sess.role === 'alice') {
+			/* After LTC claim, poll ROD funding outpoint to detect Bob's
+			   ROD claim on-chain — the relay swap_complete message may be
+			   lost or rate-limited, so chain is the authoritative fallback. */
+			if (execution.ltcClaim && execution.ltcClaim.txid) {
+				if (sess.state === 'COMPLETE') return false;
+				if (!markAutomationBusy(sess, 'pollRodSpend')) return true;
+				ENGINE.getOutspend('ROD', sess.plannedRodFunding.txid, 0).then(function (outspend) {
+					if (!outspend || !outspend.spent || !outspend.txid) {
+						clearAutomationBusy(sess, 'pollRodSpend');
+						return;
+					}
+					var live = ENGINE.restoreLive(sess.swapId) || sess;
+					live.execution = live.execution || {};
+					live.execution.rodClaim = $.extend({}, live.execution.rodClaim || {}, { txid: outspend.txid });
+					SWAP.safeAdvance(live, 'ROD_CLAIMED', 'ROD claim detected on-chain');
+					SWAP.safeAdvance(live, 'COMPLETE', 'Swap complete');
+					ENGINE.saveLive(live);
+					ENGINE.recordTrade(live);
+					slog(live.swapId, '✓ COMPLETE — Bob\'s ROD claim detected on-chain ' + short(outspend.txid));
+					clearAutomationBusy(sess, 'pollRodSpend');
+					refreshSwaps(); showActiveSwap(live.swapId); refreshHistory();
+				}).fail(function (err) {
+					clearAutomationBusy(sess, 'pollRodSpend');
+					slog(sess.swapId, 'ROD outpoint poll failed: ' + errorString(err));
+				});
+				return true;
+			}
 			if (!confirmedEnough(execution.ltcFunding, terms.ltcConfirmations)) return false;
-			if (execution.ltcClaim && execution.ltcClaim.txid) return false;
 			if (!sess.remoteLtcAdaptorSignature || !sess.adaptorSecret) return false;
 			if (!markAutomationBusy(sess, 'claimLtc')) return true;
 			ENGINE.getRodHeight().then(function (rodHeight) {
@@ -1469,15 +1501,15 @@ $(function () {
 						refreshSwaps(); showActiveSwap(updated.swapId);
 					}).fail(function (error) {
 						clearAutomationBusy(sess, 'claimLtc');
-						slog(sess.swapId, 'LTC claim blocked: ' + (error && error.message || error));
+						slog(sess.swapId, 'LTC claim blocked: ' + errorString(error));
 					});
 				} catch (claimError) {
 					clearAutomationBusy(sess, 'claimLtc');
-					slog(sess.swapId, 'LTC claim blocked: ' + (claimError.message || claimError));
+					slog(sess.swapId, 'LTC claim blocked: ' + errorString(claimError));
 				}
 			}, function (heightError) {
 				clearAutomationBusy(sess, 'claimLtc');
-				slog(sess.swapId, 'ROD height check failed: ' + (heightError && heightError.message || heightError));
+				slog(sess.swapId, 'ROD height check failed: ' + errorString(heightError));
 			});
 			return true;
 		}
@@ -1524,11 +1556,11 @@ $(function () {
 						refreshSwaps(); showActiveSwap(live.swapId); refreshHistory();
 					}).fail(function (error) {
 						clearAutomationBusy(sess, 'claimRod');
-						slog(sess.swapId, 'ROD claim blocked: ' + (error && error.message || error));
+						slog(sess.swapId, 'ROD claim blocked: ' + errorString(error));
 					});
 				} catch (rodClaimError) {
 					clearAutomationBusy(sess, 'claimRod');
-					slog(sess.swapId, 'ROD claim blocked: ' + (rodClaimError.message || rodClaimError));
+					slog(sess.swapId, 'ROD claim blocked: ' + errorString(rodClaimError));
 				}
 				return true;
 			}
@@ -1726,7 +1758,7 @@ $(function () {
 			if (/already in block chain|already in blockchain|already have transaction|txn-already-known|transaction already in block chain/i.test(message)) {
 				return persistClaimEvidence(claimTxid, true);
 			}
-			return $.Deferred().reject(error).promise();
+			return $.Deferred().reject(new Error(errorString(error))).promise();
 		});
 	}
 
@@ -1898,9 +1930,8 @@ $(function () {
 		if (n) localStorage.setItem('otcLastOrderName', n);
 	}
 
-	$('#nsOrderNameGen').on('click', function () {
-		$('#nsOrderName').val('d/otc-swap/' + randomOrderNameSuffix());
-	});
+	/* nsOrderNameGen button removed — name is now auto-generated on
+	   page load, after Create Order, and on clearCounterpartyFields() */
 
 	/* Create open order and publish full JSON to ROD name DB via Core RPC */
 	$('#nsCreateOrder').on('click', function () {
@@ -1933,6 +1964,8 @@ $(function () {
 				);
 				flash('success', 'Order written to ROD DB (' + res.action + '): ' + res.name + (tx ? ' · ' + tx : ''));
 				log('Published order → ' + res.name + ' (' + res.action + ', ' + bytes + ' bytes)' + (tx ? ' tx=' + tx : ''));
+				/* Regenerate random ROD name for the next order */
+				$('#nsOrderName').val('d/otc-swap/' + randomOrderNameSuffix());
 				/* Name may need a confirmation before name_show returns the new value */
 				setTimeout(function () { refreshBook(); }, 2000);
 			}, function (err) {
@@ -1962,10 +1995,11 @@ $(function () {
 		try {
 			if (!checkWallet()) throw new Error('Open your wallet first');
 			if (!swapAcct || !swapAcct.xprv || !swapAcct.xpub) throw new Error('Swap account not ready — reopen wallet');
-			var role = $('#nsRole').val(), peer = $.trim($('#nsPeer').val()), peerXpub = $.trim($('#nsPeerXpub').val()), peerPayoutAddress = $.trim($('#nsPeerPayoutAddr').val());
-			if (!peer) throw new Error('Enter counterparty identity, or Take an order on the Dashboard first');
-			if (!peerXpub) throw new Error('Enter counterparty swap xpub, or Take an order on the Dashboard first');
-			if (!peerPayoutAddress) throw new Error('Enter counterparty payout address, or Take an order on the Dashboard first');
+			var role = $('#nsRole').val(), peer = $.trim($('#nsPeer').val()), peerXpub = $.trim($('#nsPeerXpub').val());
+			var peerPayoutAddress = $.trim($('#nsPeerPayoutAddr').val()) || peer;
+			if (!peer) throw new Error('Take an order on the Dashboard first');
+			if (!peerXpub) throw new Error('Take an order on the Dashboard first');
+			if (!peerPayoutAddress) throw new Error('Take an order on the Dashboard first');
 			if (peerXpub === swapAcct.xpub) throw new Error('Counterparty xpub must differ from your swap xpub');
 
 			/* Dust-limit validation: both the funding output AND the claim
@@ -2503,6 +2537,8 @@ $(function () {
 	setInterval(function () {
 		if ($('#otc').is(':visible')) refreshRpcStatus();
 	}, 30000);
+	/* Generate random ROD name on every page load */
+	$('#nsOrderName').val('d/otc-swap/' + randomOrderNameSuffix());
 	refreshSwaps();
 	log('OTC swap app ready — Nostr connecting automatically');
 });

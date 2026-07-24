@@ -1,6 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Copyright (c) SpaceXpanse contributors -->
-
 # AGENTS.md
 
 This file provides guidance to agents when working with code in this repository.

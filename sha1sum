@@ -1,7 +1,7 @@
----- Version 2.3.0-beta 2026.07.19 ----
+---- Version 2.4.0-alpha.0 2026.07.24 ----
 7b6bffbb5ef362c308f22a64fa6ab69a26f48c92  ./.gitignore
 212d797d23ac63499e3ef8d34e95d5f5377b8992  ./AGENTS.md
-1a3c3f36e7ca910e15c516d7f3093430ff6a1b27  ./CHANGELOG.md
+573e35190c6dfdfb092b012d8e994080c4b305ec  ./CHANGELOG.md
 e67f343a11165846df280eb195c401b6fc563b77  ./CLAUDE.md
 d55948fda8f4ee2109f89250b39a360d6cd45670  ./LICENSE
 b5f723a87456681acbfba87f2fecce4a61114447  ./README.md
@@ -45,7 +45,7 @@ e1d1de596cc7feff955ffc848265850f6603724f  ./images/icon-192.png
 c66a494838ddc3ebe637aeac00ef298abd76739e  ./images/icon-512-maskable.png
 f7b02e1b38d4878b25994f7caf6886aa3cfca140  ./images/icon-512.png
 f2af060f1cadbc9065c8c465c648dc01be67cc12  ./images/loader.gif
-f8c12d0d48807193a12d1e0b7a4e998175c5ffbf  ./index.html
+89ea098243116bf3475ed6a5a02e038ba583969f  ./index.html
 a56ff0cb2cafaa41bc5a892cc780bbbfd5d8452a  ./js/aes.js
 415e854fc3ecd4db3e92e423b247a02c21646001  ./js/bootstrap-datetimepicker.min.js
 e2ddfe5a574c29f39b511aada1bd85e0ba60fa70  ./js/bootstrap.min.js
@@ -71,8 +71,8 @@ fad26c13a5c8e1bb4cf7071824cd5fa22b100cc6  ./js/qrcode.js
 146e19d9aaec92c4d15606847b3a95020eca1484  ./js/ripemd160.js
 038060048c602d268b0575a5e68e87611ac3ee05  ./js/sha512.js
 950895fee660f675bd491470621139b9a6421f7c  ./js/transition.js
-e03b3658cd2fa7fce5f2b93972b4a18317b1504e  ./manifest.webmanifest
-b60ddd9115c2f88dda578abe402246d2341cefe6  ./sw.js
+75d0bb0c2e9a8357738bd09a7ea730b92f03066d  ./manifest.webmanifest
+d431e38c89fd64d1110abb6638297c047ce142ed  ./sw.js
 19fcd3b119403a5337f2e7d324f12f3e073387fd  ./tests/README.md
 57d640da279c50b36675d44a892ccbf356e8e74e  ./tests/harness/README.md
 9767a7238024fcec63ceb1648e8ac1feb595c656  ./tests/harness/e2e-report-happy.json

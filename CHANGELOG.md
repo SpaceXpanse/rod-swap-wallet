@@ -7,6 +7,62 @@ All notable changes to this project will be documented in this file.
 
 The format is inspired by Keep a Changelog and follows Semantic Versioning principles where practical.
 
+## [Unreleased]
+
+## [2.4.0-alpha.0] - 2026-07-24
+
+### Documentation
+- Added concise Apache 2.0 SPDX/copyright notices to fork-specific safe-to-edit project files, while intentionally skipping original Coinb.in sources, vendored/minified or generated assets, binaries/media/fonts/PDFs, lockfiles, JSON artifacts without a safe comment strategy, and other comment-unsafe paths.
+- Added project-level mixed-license documentation with root [`LICENSE`](LICENSE) for inherited MIT material, root [`LICENSE-APACHE`](LICENSE-APACHE) for SpaceXpanse fork additions, and clarified repository licensing scope in [`README.md`](README.md).
+
+### Fixed (2026-07-18 — LTC tx creation/validation & swap workflow hardening)
+- **Satoshi/coin unit handling (critical, LTC-breaking):** [`js/otc-engine.js`](js/otc-engine.js) treated any numeric amount ≤ 21,000,000 as coin-denominated and multiplied by 1e8. Esplora (litecoinspace.org) returns satoshis, so every LTC UTXO/output below 0.21 LTC was inflated 1e8-fold — LTC funding construction produced `bad-txns-in-belowout` transactions, funding verification reported "output not found", and claim amounts were astronomically wrong. Units are now explicit: UTXO and evidence values are always satoshis; `findFundingOutput()` decides by `apiType` (esplora = sats, ROD `/transaction` = Core-style coin floats); `buildClaimTxFromFunding()` prefers satoshi `value` evidence over the decimal `amount` string.
+- **Nostr self-echo overwrote counterparty signatures (claim-breaking):** relays replay a client's own events (always after a reload, when the in-memory dedup cache is empty). The `swap_*_normal_signature` handlers stored the echoed local signature in the `remote*` slots, assembling a 2-of-2 scriptSig with the same signature twice — guaranteed `OP_CHECKMULTISIG` failure at broadcast. Own event IDs are now marked seen at publish time in `publishSwapMessage()`, and all signature/claim/complete handlers ignore events authored by the local Nostr pubkey.
+- **Local CHECKMULTISIG pre-broadcast verification:** `buildClaim()` now verifies both claim signatures against the redeem-script pubkeys (in order) before broadcasting, and clears a stored invalid counterparty signature instead of broadcasting a transaction the network must reject.
+- **Configured API endpoints were ignored:** the OTC Settings ROD/LTC API URLs were saved but never propagated to `coinjs.networks`, so all real chain calls (balance/UTXO/tx/broadcast) kept using compile-time defaults. `engine.applyApiConfig()` now applies them at engine load and on save.
+- **LTC funding fee floor:** the fixed 1000-litoshi funding fee sat at Litecoin's relay floor once the tx grew past ~2 inputs. `buildFundingTx()` now estimates size and enforces ≥ 2 lit/byte (never lowering a caller-provided fee); ROD fees are unchanged.
+- **Swap liveness:** each side now self-verifies its own funding output (Alice/ROD, Bob/LTC) instead of waiting for the counterparty's verified-evidence message, and a 30-second automation tick re-drives in-flight sessions, so one failed API call or missed relay message no longer strands a swap. Bob additionally funds LTC only after locally verifying the ROD funding output (`verifiedLocally` flag; remote evidence can no longer masquerade as local verification).
+- **CSP blocked all Nostr relays:** `connect-src` in [`_headers`](_headers) had no `wss:` entry, so the deployed site could never open a relay WebSocket. Added `wss:`.
+- **Service worker never installed:** [`sw.js`](sw.js) `cache.addAll()` referenced the removed `otc-test.html` (any 404 rejects the whole install) and omitted `js/otc-engine.js`/`js/otc-app-ui.js`. Asset list fixed, cache bumped to `v2.2.1-beta`.
+
+### Verification (2026-07-18)
+- End-to-end proof harness (Playwright, two real browser contexts as Alice/Bob, local NIP-01 relay, mock ROD API + mock esplora that fully validate every broadcast transaction with independent bitcoinjs-lib sighashes + noble secp256k1): 24/24 checks pass, including a 0.05 LTC swap (below the old 0.21 LTC unit-bug threshold), 2-of-2 P2SH CHECKMULTISIG claim validation on both chains, mid-swap page-reload resilience, and both sessions reaching `COMPLETE`. Regression run against the pre-fix code reproduces the LTC failure (`bad-txns-in-belowout (20000000 < 1999999999999000)`).
+
+### Documentation
+- Carbon Memory was refreshed after OTC codebase analysis; volatile memory now records the current OTC integration surface, indexed-source refresh inputs, follow-up verification for the missing [`otc-test.html`](otc-test.html) reference, and the latest blast-radius review across [`js/otc-engine.js`](js/otc-engine.js), [`js/otc-app-ui.js`](js/otc-app-ui.js), [`js/otc-swap.js`](js/otc-swap.js), [`sw.js`](sw.js), and [`_headers`](_headers).
+
+### Added
+- Browser OTC runtime implementation:
+  - ECDSA adaptor signature helpers in [`js/ecdsa-adaptor.js`](js/ecdsa-adaptor.js).
+  - Immutable ROD/LTC chain parameters in [`js/otc-chains.js`](js/otc-chains.js).
+  - Versioned local storage management in [`js/otc-storage.js`](js/otc-storage.js).
+  - Manual Nostr envelope handling in [`js/otc-nostr.js`](js/otc-nostr.js).
+  - Swap construction, state machine, and settlement logic in [`js/otc-swap.js`](js/otc-swap.js).
+  - OTC UI tab and validation harness in [`otc-test.html`](otc-test.html).
+- Security hardening: OTC state persistence now automatically strips sensitive private keys (`localChildPrivateKey`, `privateKeyHex`, `privateKeyWif`, `xprv`) from backups/exports.
+- PWA cache update to include new OTC assets.
+
+### Changed
+- Integrated OTC UI into [`index.html`](index.html) and updated [`css/style.css`](css/style.css) for swap-specific layouts.
+- Updated [`sw.js`](sw.js) and [`_headers`](_headers) to support OTC runtime and narrow CSP helper origins.
+
+### Verification
+- OTC runtime validated via [`otc-test.html`](otc-test.html) (6/6 suites passed) and smoke-checked in main wallet UI.
+
+### Added
+- Durable maintainer-wiki ingest of the OTC swap planning documents in [`docs/maintainer-wiki/concept-otc-swap-plan.md`](docs/maintainer-wiki/concept-otc-swap-plan.md), including the Phase 1 boundary that routes ROD name operations through local ROD Core RPC while preserving ordinary chain queries and broadcasting on `api.spacexpanse.org:1234`.
+- Browser OTC runtime scaffolding in [`index.html`](index.html) with new OTC modules [`js/ecdsa-adaptor.js`](js/ecdsa-adaptor.js), [`js/otc-chains.js`](js/otc-chains.js), [`js/otc-storage.js`](js/otc-storage.js), [`js/otc-nostr.js`](js/otc-nostr.js), and [`js/otc-swap.js`](js/otc-swap.js), plus the static validation harness [`otc-test.html`](otc-test.html).
+- Dedicated OTC swap account derivation, deterministic terms hashing, immutable ROD/LTC chain helpers, manual Nostr envelope import/export, helper-mediated Phase 1 ROD name-operation adapter handling, strict swap-state persistence, and browser validation flows for the straight OTC implementation plan.
+
+### Changed
+- Expanded the architecture overview in [`docs/maintainer-wiki/concept-architecture-overview.md`](docs/maintainer-wiki/concept-architecture-overview.md) to distinguish current wallet runtime behavior from forward-looking OTC swap planning content in [`docs/rod-web-swap-v0.3.2.md`](docs/rod-web-swap-v0.3.2.md) and [`docs/rod-web-swap-v0.3.3.md`](docs/rod-web-swap-v0.3.3.md).
+- Extended [`js/coin.js`](js/coin.js) with reusable [`coinjs.ecdsa`](js/coin.js) helpers, tagged hashing, and adaptor nonce derivation while preserving ordinary transaction-signing output paths through the existing signer.
+- Updated [`sw.js`](sw.js) to cache the OTC scripts and validation harness for offline-first static testing.
+- Narrowed OTC helper deployment expectations in [`_headers`](_headers) and [`index.html`](index.html:505) so the documented Phase 1 helper flow works only for same-origin or explicit local helper origins on port `11999`.
+
+### Security
+- OTC storage sanitization now strips derived child private keys and similar private signing material from [`localStorage`](js/otc-storage.js:75) backups/exports while keeping only live-page session memory in [`js/otc-swap.js`](js/otc-swap.js:161).
+
 ## [2.3.0-beta] - 2026-07-19 — Trustless settlement: timelocked refunds + adaptor signatures
 
 ### Added (Critical — refund path)
@@ -30,7 +86,7 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
   - **Refund path 21/21**: confirmation gate holds (Bob never funds at 1/3 confs), Bob disappears, chain passes `refundRodHeight`, automation broadcasts the pre-signed refund (locktime + both CHECKMULTISIG signatures independently validated), funds return to Alice, state `REFUNDED`.
   - **Reload resilience**: Alice reloads mid-swap after PREPARED; adaptor signature, signed refund and secret persist and the swap still completes.
 
-## [Unreleased]
+## [2.1.0-beta] - 2026-06-13
 
 ### Documentation
 - Added concise Apache 2.0 SPDX/copyright notices to fork-specific safe-to-edit project files, while intentionally skipping original Coinb.in sources, vendored/minified or generated assets, binaries/media/fonts/PDFs, lockfiles, JSON artifacts without a safe comment strategy, and other comment-unsafe paths.

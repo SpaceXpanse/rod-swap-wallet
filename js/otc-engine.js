@@ -19,22 +19,101 @@
 	var CFG_KEY = 'rodOtcEngineConfig';
 	var defaults = {
 		rodApiUrl: 'https://api.spacexpanse.org:1234',
-		ltcApiUrl: 'https://litecoinspace.org/api',
+		altApiUrl: 'https://litecoinspace.org/api',
 		rpcUrl: '', rpcPort: '18080', rpcUser: '', rpcPass: '', rpcWallet: '',
 		relays: ['wss://relay.damus.io','wss://nos.lol','wss://relay.nostr.band'],
 		releaseBlocks: 20,
-		/* Refund delays in native blocks of each chain. Alice (secret holder,
-		   funds ROD first) must refund LATER in wall time than Bob's LTC
-		   refund: ROD ~30s blocks × 480 ≈ 4h, LTC 2.5min × 24 ≈ 1h. */
+		/* Refund delays in native blocks of each chain. Alice (the secret
+		   holder, who funds ROD first) must refund LATER in wall time than Bob
+		   refunds the alt leg — otherwise the secret holder could reclaim ROD
+		   and still claim the alt coin. ROD ~30s blocks × 480 ≈ 4h. */
 		refundRodBlocks: 480,
-		ltcRefundBlocks: 24,
+		altRefundBlocks: 24,
 		/* Confirmation-count acceptance gates */
 		rodConfirmations: 1,
-		ltcConfirmations: 1,
+		altConfirmations: 1,
+		/* Per-alt-chain settings. Block counts are chosen so the refund window
+		   is the same WALL-CLOCK duration on every chain (~1 hour), because the
+		   protocol's safety margin is a time relationship, not a block count:
+		     LTC  2.5 min/block ×  24 ≈ 1h
+		     DOGE 1    min/block ×  60 ≈ 1h
+		   Confirmations follow the same logic. Litecoin's historical default of
+		   1 confirmation is ~2.5 minutes of work; Dogecoin blocks arrive 2.5x
+		   faster AND carry less independent security (its Scrypt hashrate is
+		   supplied almost entirely by Litecoin merge-miners), so 6 confirmations
+		   (~6 min) is the closer equivalent. Both are user-configurable, and
+		   both are bounded by the 1-hour refund window above. */
+		altChains: {
+			LTC: {
+				apiUrl: 'https://litecoinspace.org/api',
+				apiType: 'esplora',
+				refundBlocks: 24,
+				confirmations: 1
+			},
+			DOGE: {
+				apiUrl: 'https://api.blockcypher.com/v1/doge/main',
+				apiType: 'blockcypher',
+				refundBlocks: 60,
+				confirmations: 6
+			},
+			/* Bitcoin: 6 blocks × 600s = 3600s ≈ 1h, matching the other alt
+			   chains' wall-clock refund window. mempool.space serves a public
+			   Esplora-compatible API (CORS, keyless). */
+			BTC: {
+				apiUrl: 'https://mempool.space/api',
+				apiType: 'esplora',
+				refundBlocks: 6,
+				confirmations: 1
+			},
+			/* Bitcoin Cash: 6 blocks × 600s = 3600s ≈ 1h. Blockchair is the
+			   only keyless public API serving CORS + raw hex + outspend lookup
+			   for BCH. */
+			BCH: {
+				apiUrl: 'https://api.blockchair.com/bitcoin-cash',
+				apiType: 'blockchair',
+				refundBlocks: 6,
+				confirmations: 1
+			}
+		},
 		/* Automation re-drive interval (ms); tests may lower this */
 		tickMs: 30000
 	};
 	engine.defaults = defaults;
+
+	function mergeAltChains(saved) {
+		var merged = {};
+		for (var code in defaults.altChains) {
+			if (defaults.altChains.hasOwnProperty(code)) {
+				merged[code] = $.extend({}, defaults.altChains[code]);
+			}
+		}
+		if (saved && typeof saved === 'object') {
+			for (var savedCode in saved) {
+				if (saved.hasOwnProperty(savedCode) && saved[savedCode] && typeof saved[savedCode] === 'object') {
+					merged[savedCode] = $.extend(merged[savedCode] || {}, saved[savedCode]);
+				}
+			}
+		}
+		return merged;
+	}
+
+	/* Resolved settings for one alt chain.
+
+	   The flat altApiUrl / altRefundBlocks / altConfirmations keys predate
+	   multi-chain support and are still honoured, but ONLY for the default alt
+	   chain — they were written when "the alt leg" could only mean Litecoin, so
+	   applying them to Dogecoin would silently point it at a Litecoin API. */
+	engine.altChainConfig = function (cc, cfg) {
+		var c = cfg || engine.loadConfig();
+		var code = cc || SWAP.DEFAULT_ALT_CHAIN;
+		var resolved = $.extend({}, (c.altChains && c.altChains[code]) || defaults.altChains[code] || {});
+		if (code === SWAP.DEFAULT_ALT_CHAIN) {
+			if (c.altApiUrl) resolved.apiUrl = c.altApiUrl;
+			if (c.altRefundBlocks != null) resolved.refundBlocks = c.altRefundBlocks;
+			if (c.altConfirmations != null) resolved.confirmations = c.altConfirmations;
+		}
+		return resolved;
+	};
 	/* Shallow merge + explicit array replace.
 	   jQuery deep extend merges arrays by index, so saving 2 relays left the 3rd default stuck. */
 	engine.loadConfig = function () {
@@ -51,6 +130,10 @@
 			} else {
 				cfg.relays = defaults.relays.slice();
 			}
+			/* $.extend is shallow, so a saved altChains map containing only the
+			   chain the user edited would otherwise delete every other chain's
+			   settings. Merge per chain instead. */
+			cfg.altChains = mergeAltChains(saved.altChains);
 			return cfg;
 		} catch (e) {
 			cfg = $.extend({}, defaults);
@@ -67,7 +150,7 @@
 		engine.applyApiConfig(toSave);
 	};
 	/* Propagate configured API base URLs into the coinjs network profiles.
-	   Without this, the OTC Settings ROD/LTC API fields were saved but every
+	   Without this, the OTC Settings per-chain API fields were saved but every
 	   actual chain call (listUnspent/broadcast/getTransaction/addressBalance)
 	   kept using the compile-time defaults in coinjs.networks. */
 	engine.applyApiConfig = function (cfg) {
@@ -79,9 +162,16 @@
 				coinjs.networks.ROD.apiBase = rod;
 				coinjs.rodApi = rod;
 			}
-			var ltc = $.trim(c.ltcApiUrl || '');
-			if (ltc) {
-				coinjs.networks.LTC.apiBase = ltc.replace(/\/+$/, '');
+			for (var code in coinjs.networks) {
+				if (!coinjs.networks.hasOwnProperty(code) || code === 'ROD') continue;
+				var chainCfg = engine.altChainConfig(code, c);
+				var base = $.trim(chainCfg.apiUrl || '');
+				if (base) {
+					coinjs.networks[code].apiBase = base.replace(/\/+$/, '');
+				}
+				if (chainCfg.apiType && coinjs.explorer && coinjs.explorer.drivers[chainCfg.apiType]) {
+					coinjs.networks[code].apiType = chainCfg.apiType;
+				}
 			}
 		} catch (e) {}
 		return c;
@@ -138,28 +228,25 @@
 	engine.rodGet = function (path) {
 		return $.getJSON(engine.loadConfig().rodApiUrl + path);
 	};
-	engine.ltcGet = function (path) {
-		return $.getJSON(engine.loadConfig().ltcApiUrl + path);
-	};
 	engine.getRodHeight = function () {
 		return engine.rodGet('/info').then(function (r) {
 			var d = r.result || r;
 			return d.blocks || d.height || (d.info && d.info.blocks) || 0;
 		});
 	};
-	/* Esplora: GET /blocks/tip/height returns the tip height as plain text */
-	engine.getLtcHeight = function () {
-		var d = $.Deferred();
-		$.ajax({ url: engine.loadConfig().ltcApiUrl + '/blocks/tip/height', method: 'GET', dataType: 'text' })
-			.then(function (body) {
-				var height = parseInt(String(body).replace(/[^0-9]/g, ''), 10);
-				if (!isFinite(height) || height <= 0) d.reject('Invalid LTC tip height: ' + body);
-				else d.resolve(height);
-			}, function (xhr) { d.reject('LTC tip height fetch failed (' + (xhr && xhr.status) + ')'); });
-		return d.promise();
+	/* Chain tip for any non-ROD leg, via whichever explorer backend that chain
+	   is configured to use. */
+	engine.getAltHeight = function (cc) {
+		var chainCode = cc || SWAP.DEFAULT_ALT_CHAIN;
+		var network = coinjs.networks[chainCode];
+		if (!network) return $.Deferred().reject('Unknown chain ' + chainCode).promise();
+		if (!coinjs.explorer || !coinjs.explorer.isSupported(network)) {
+			return $.Deferred().reject('No explorer backend for ' + chainCode).promise();
+		}
+		return coinjs.explorer.tipHeight(network);
 	};
 	engine.getChainHeight = function (cc) {
-		return cc === 'LTC' ? engine.getLtcHeight() : engine.getRodHeight();
+		return cc === 'ROD' ? engine.getRodHeight() : engine.getAltHeight(cc);
 	};
 	/**
 	 * Resolve stored RPC settings to a display endpoint (no network I/O).
@@ -383,21 +470,27 @@
 		if (!typeOk) {
 			return { ok: false, reason: 'not an otc-order (type=' + (value.type || value.t || 'missing') + ')' };
 		}
-		var pair = value.pair || 'ROD/LTC';
-		if (pair !== 'ROD/LTC') {
+		/* Orders published before multi-chain support carry no pair field and
+		   are Litecoin by definition. Anything else must name a ROD/<alt> pair
+		   whose alt leg this build actually knows how to settle. */
+		var pair = value.pair || ('ROD/' + SWAP.DEFAULT_ALT_CHAIN);
+		var pairParts = String(pair).split('/');
+		var pairAltChain = pairParts.length === 2 && pairParts[0] === 'ROD' ? pairParts[1] : '';
+		if (!pairAltChain || pairAltChain === 'ROD' || !CHAINS.definitions[pairAltChain]) {
 			return { ok: false, reason: 'unsupported pair ' + pair };
 		}
 		var give = value.give != null ? value.give : value.rodAmount;
-		var want = value.want != null ? value.want : value.ltcAmount;
+		var want = value.want != null ? value.want : value.altAmount;
 		if (!(parseFloat(give) > 0) || !(parseFloat(want) > 0)) {
 			return {
 				ok: false,
-				reason: 'incomplete order — need give/want (or rodAmount/ltcAmount). On-chain value only has: ' +
+				reason: 'incomplete order — need give/want (or rodAmount/altAmount). On-chain value only has: ' +
 					Object.keys(value).join(', ')
 			};
 		}
 		var offer = $.extend({}, value);
 		offer.pair = pair;
+		offer.altChain = pairAltChain;
 		offer.type = value.type || 'otc-order';
 		offer.give = give;
 		offer.want = want;
@@ -752,7 +845,11 @@
 					/* Match by address OR script, with 1-sat tolerance for float rounding */
 					var addrMatch = outAddr === expectedAddress;
 					var scriptMatch = outScript && expectedScript && outScript === expectedScript;
-					var valueMatch = Math.abs(outputSats - expectedSats) <= 1;
+					/* EXACT match. Both sides go through CHAINS.decimalToSats
+					   now, so the old +/-1 float-rounding tolerance no longer
+					   buys anything and let a counterparty underfund by one
+					   base unit while still producing accepted evidence. */
+					var valueMatch = outputSats === expectedSats;
 					if ((addrMatch || scriptMatch) && valueMatch) {
 						return {
 							chainCode: cc, txid: txid, vout: vout,
@@ -773,7 +870,7 @@
 		/* Esplora reports no confirmation count — derive a real one from the
 		   chain tip so confirmation gates work on LTC, not just ROD. */
 		return matched.then(function (evidence) {
-			if (apiType !== 'esplora' || !evidence._esploraBlockHeight) {
+			if (apiType === 'rod' || !evidence._esploraBlockHeight) {
 				delete evidence._esploraBlockHeight;
 				return evidence;
 			}
@@ -792,9 +889,10 @@
 		return withChain(cc, function () {
 			var d = $.Deferred();
 			var network = coinjs.getNetwork();
-			var url = (network.apiType === 'esplora')
-				? network.apiBase + '/tx/' + encodeURIComponent(txid)
-				: (network.apiBase || coinjs.rodApi) + '/transaction/' + encodeURIComponent(txid);
+			if (coinjs.explorer && coinjs.explorer.isSupported(network)) {
+				return coinjs.explorer.tx(network, txid);
+			}
+			var url = (network.apiBase || coinjs.rodApi) + '/transaction/' + encodeURIComponent(txid);
 			coinjs.ajax(url, function (response) {
 				try {
 					var parsed = JSON.parse(response);
@@ -811,13 +909,44 @@
 			return d.promise();
 		});
 	};
-	/* Minimum fee rates in sats per estimated byte. Litecoin Core relays at
-	   0.00001 LTC/kB (1 lit/vB); 2 lit/vB keeps size-grown funding txs safely
-	   above the floor. ROD keeps the caller-provided fee untouched (0 rate). */
-	engine.FEE_RATE_SATS_PER_BYTE = { LTC: 2, ROD: 0 };
+	/* Construction fee rate in base units per estimated byte, per chain. Comes
+	   from the chain policy table so a new chain cannot be added without one:
+	   ROD stays at 0 ("use the caller's fee verbatim"), Litecoin at 2 lit/vB,
+	   Dogecoin at its 1000 koinu/B mining floor. */
+	engine.feeRateFor = function (cc) {
+		return CHAINS.getPolicy(cc).feeRatePerByte || 0;
+	};
 	engine.estimateP2pkhTxBytes = function (inputCount, outputCount) {
 		/* ~148 B per P2PKH input, ~34 B per output, ~10 B overhead */
 		return 10 + (inputCount * 148) + (outputCount * 34);
+	};
+	/* A 2-of-2 P2SH settlement input carries OP_0 + two ~72 B DER signatures +
+	   a 71 B redeem script ≈ 258 B including its length prefix. */
+	engine.estimateP2shMultisigTxBytes = function (inputCount, outputCount) {
+		return 12 + (inputCount * 260) + (outputCount * 34);
+	};
+
+	/* Reject a settlement transaction that the network would not relay or mine,
+	   BEFORE its sighash is committed to by a signature. On Dogecoin this is
+	   load-bearing rather than cosmetic: dust is an absolute amount there, so
+	   an output under the hard limit makes the whole transaction non-standard
+	   no matter how much fee is attached, and the relay minimum carries a flat
+	   surcharge for every soft-dust output. */
+	engine.assertSettlementPolicy = function (cc, sizeBytes, feeSats, outputValuesSats, label) {
+		var policy = CHAINS.getPolicy(cc);
+		var what = label || 'settlement';
+		for (var i = 0; i < outputValuesSats.length; i++) {
+			if (CHAINS.isHardDust(cc, outputValuesSats[i])) {
+				throw new Error(cc + ' ' + what + ' output ' + outputValuesSats[i] +
+					' is below the ' + policy.hardDustSats + ' dust limit — the transaction would be non-standard');
+			}
+		}
+		var minimum = CHAINS.minRelayFeeSats(cc, sizeBytes, outputValuesSats);
+		if (feeSats < minimum) {
+			throw new Error(cc + ' ' + what + ' fee ' + feeSats + ' is below the ' + minimum +
+				' relay minimum for ' + sizeBytes + ' bytes — the transaction would not propagate');
+		}
+		return true;
 	};
 	engine.buildFundingTx = function (cc, sourceWif, destinationAddress, amountDecimal, feeDecimal) {
 		var wallet = CHAINS.getWalletMaterialForChain(sourceWif, cc);
@@ -827,7 +956,8 @@
 			try {
 			return withChain(cc, function () {
 				var utxos = response.data || [];
-				var feeRate = engine.FEE_RATE_SATS_PER_BYTE[cc] || 0;
+				var policy = CHAINS.getPolicy(cc);
+				var feeRate = engine.feeRateFor(cc);
 				function selectUtxos(feeSats) {
 					var picked = [], sum = 0;
 					for (var i = 0; i < utxos.length && sum < amountSats + feeSats; i++) {
@@ -844,7 +974,18 @@
 				var feeSats = baseFeeSats, selection = selectUtxos(feeSats);
 				for (var pass = 0; pass < 5; pass++) {
 					var estBytes = engine.estimateP2pkhTxBytes(Math.max(selection.selected.length, 1), 2);
-					var minFee = Math.max(baseFeeSats, Math.ceil(estBytes * feeRate));
+					/* On Dogecoin a change output under the soft dust limit adds a
+					   flat per-output surcharge to the relay minimum, so the fee
+					   has to be sized against the OUTPUTS as well as the bytes. */
+					var projectedChange = selection.total - amountSats - feeSats;
+					var projectedOutputs = (projectedChange >= policy.changeThresholdSats)
+						? [amountSats, projectedChange]
+						: [amountSats];
+					var minFee = Math.max(
+						baseFeeSats,
+						Math.ceil(estBytes * feeRate),
+						CHAINS.minRelayFeeSats(cc, estBytes, projectedOutputs)
+					);
 					if (minFee <= feeSats) break;
 					feeSats = minFee;
 					selection = selectUtxos(feeSats);
@@ -852,12 +993,32 @@
 				var selected = selection.selected, total = selection.total;
 				if (total < amountSats + feeSats) throw new Error('Insufficient ' + cc + ' UTXOs: need ' + CHAINS.satsToDecimal(amountSats + feeSats) + ', selected ' + CHAINS.satsToDecimal(total));
 				var tx = coinjs.transaction();
+				tx.forkId = coinjs.usesForkId();
 				for (var s = 0; s < selected.length; s++) {
-					tx.addinput(selected[s].txid, selected[s].vout, selected[s].script, 0xffffffff);
+					tx.addinput(selected[s].txid, selected[s].vout, selected[s].script, 0xffffffff, selected[s].value);
 				}
 				tx.addoutput(destinationAddress, CHAINS.satsToDecimal(amountSats));
 				var change = total - amountSats - feeSats;
-				if (change > 546) tx.addoutput(wallet.address, CHAINS.satsToDecimal(change));
+				/* Change below the chain's threshold is abandoned to the fee
+				   rather than emitted: on Dogecoin an uneconomic change output
+				   would either be outright non-standard (hard dust) or trigger
+				   the 0.01 DOGE soft-dust surcharge, which costs more than the
+				   change is worth. */
+				if (change >= policy.changeThresholdSats) {
+					tx.addoutput(wallet.address, CHAINS.satsToDecimal(change));
+				} else if (change > 0) {
+					feeSats += change;
+					change = 0;
+				}
+				/* Validate what was actually built, not what the loop intended:
+				   the convergence loop above is bounded, and funding is the one
+				   transaction that had no post-construction policy check. An
+				   underpaid funding tx relays but is skipped by miners running
+				   the default -blockmintxfee, so it can sit unconfirmed past the
+				   swap's refund deadline. */
+				var finalOutputs = change > 0 ? [amountSats, change] : [amountSats];
+				var finalBytes = engine.estimateP2pkhTxBytes(selected.length, finalOutputs.length);
+				engine.assertSettlementPolicy(cc, finalBytes, feeSats, finalOutputs, 'funding');
 				tx.sign(sourceWif);
 				var txhex = tx.serialize();
 				return { chainCode: cc, txhex: txhex, txid: txidFromHex(txhex), sourceAddress: wallet.address, destinationAddress: destinationAddress, amount: CHAINS.satsToDecimal(amountSats), fee: CHAINS.satsToDecimal(feeSats), selectedUtxos: selected, change: CHAINS.satsToDecimal(change > 0 ? change : 0) };
@@ -866,7 +1027,7 @@
 				/* jQuery 1.9 does not convert exceptions in .then callbacks into
 				   rejections — without this, a failed build (e.g. insufficient
 				   LTC UTXOs) escapes uncaught, .fail() never runs and the
-				   fundLtc automation flag stays stuck forever. */
+				   fundAlt automation flag stays stuck forever. */
 				return $.Deferred().reject(buildError).promise();
 			}
 		});
@@ -881,13 +1042,18 @@
 				: CHAINS.decimalToSats(String(fundingEvidence.amount));
 			var feeSats = CHAINS.decimalToSats(feeDecimal || '0.00001000');
 			if (amountSats <= feeSats) throw new Error('Claim amount does not cover fee');
+			engine.assertSettlementPolicy(cc, engine.estimateP2shMultisigTxBytes(1, 1), feeSats, [amountSats - feeSats], 'claim');
 			var tx = coinjs.transaction();
-			tx.addinput(fundingEvidence.txid, fundingEvidence.vout, redeemScript, 0xffffffff);
+			/* Pin the sighash rule and the prevout amount now, while the chain
+			   context is still active: on BCH the amount is part of the signed
+			   preimage, so a claim built without it cannot be signed at all. */
+			tx.forkId = coinjs.usesForkId();
+			tx.addinput(fundingEvidence.txid, fundingEvidence.vout, redeemScript, 0xffffffff, amountSats);
 			tx.addoutput(destinationAddress, CHAINS.satsToDecimal(amountSats - feeSats));
 			return tx;
 		});
 	};
-	engine.signClaimTx = function (cc, tx, wif) { return withChain(cc, function () { return tx.transactionSig(0, wif, 1); }); };
+	engine.signClaimTx = function (cc, tx, wif) { return withChain(cc, function () { return tx.transactionSig(0, wif, tx.sigHashType()); }); };
 	/* Timelocked refund spending the 2-of-2 funding output back to the
 	   original funder. nLockTime enforcement requires a non-final input
 	   sequence (0xfffffffe); the tx is then invalid until the chain reaches
@@ -902,9 +1068,11 @@
 			if (amountSats <= feeSats) throw new Error('Refund amount does not cover fee');
 			var height = parseInt(lockHeight, 10);
 			if (!isFinite(height) || height <= 0) throw new Error('Refund lock height is required');
+			engine.assertSettlementPolicy(cc, engine.estimateP2shMultisigTxBytes(1, 1), feeSats, [amountSats - feeSats], 'refund');
 			var tx = coinjs.transaction();
 			tx.lock_time = height;
-			tx.addinput(fundingEvidence.txid, fundingEvidence.vout, redeemScript, 0xfffffffe);
+			tx.forkId = coinjs.usesForkId();
+			tx.addinput(fundingEvidence.txid, fundingEvidence.vout, redeemScript, 0xfffffffe, amountSats);
 			tx.addoutput(destinationAddress, CHAINS.satsToDecimal(amountSats - feeSats));
 			return tx;
 		});
@@ -915,15 +1083,8 @@
 	engine.getTxHex = function (cc, txid) {
 		return withChain(cc, function () {
 			var network = coinjs.getNetwork();
-			if (network.apiType === 'esplora') {
-				var d = $.Deferred();
-				$.ajax({ url: network.apiBase + '/tx/' + encodeURIComponent(txid) + '/hex', method: 'GET', dataType: 'text' })
-					.then(function (body) {
-						var hex = $.trim(String(body));
-						if (/^[0-9a-f]+$/i.test(hex)) d.resolve(hex);
-						else d.reject('Invalid tx hex response');
-					}, function (xhr) { d.reject('tx hex fetch failed (' + (xhr && xhr.status) + ')'); });
-				return d.promise();
+			if (coinjs.explorer && coinjs.explorer.isSupported(network)) {
+				return coinjs.explorer.txHex(network, txid);
 			}
 			return engine.getTransactionRaw(cc, txid).then(function (txData) {
 				if (txData && txData.hex) return txData.hex;
@@ -937,13 +1098,8 @@
 	engine.getOutspend = function (cc, txid, vout) {
 		return withChain(cc, function () {
 			var network = coinjs.getNetwork();
-			if (network.apiType === 'esplora') {
-				var d = $.Deferred();
-				coinjs.ajax(network.apiBase + '/tx/' + encodeURIComponent(txid) + '/outspend/' + vout, function (response) {
-					try { d.resolve(JSON.parse(response)); }
-					catch (e) { d.reject('Invalid outspend response'); }
-				}, 'GET');
-				return d.promise();
+			if (coinjs.explorer && coinjs.explorer.isSupported(network)) {
+				return coinjs.explorer.outspend(network, txid, vout);
 			}
 			/* ROD (non-esplora) fallback: fetch the tx and check if the vout
 			   has a spentTxId or isSpent flag set by the REST API. */
@@ -1000,20 +1156,23 @@
 			return tx;
 		});
 	};
-	engine.buildClaimTx = function (cc, txid, vout, rs, amt, addr, fee) {
-		return withChain(cc, function () {
-			var tx = coinjs.transaction(); tx.addinput(txid, vout, rs, 0xffffffff);
-			tx.addoutput(addr, parseFloat(amt) - parseFloat(fee)); return tx;
-		});
-	};
-	engine.sighash = function (tx) { return Crypto.util.hexToBytes(tx.transactionHash(0, 1)); };
-	engine.signOrd = function (tx, wif) { return tx.transactionSig(0, wif, 1); };
+	/* The message every adaptor signature and every pre-signed refund commits
+	   to. Chain-aware: BCH needs the fork-id preimage, and a legacy hash here
+	   would make both peers verify each other's signatures happily and then
+	   have the network reject the settlement. */
+	engine.sighash = function (tx) { return Crypto.util.hexToBytes(tx.transactionHashAny(0, tx.sigHashType())); };
+	engine.signOrd = function (tx, wif) { return tx.transactionSig(0, wif, tx.sigHashType()); };
 	engine.makeAdaptorSig = function (sess, tx) {
 		return coinjs.adaptor.encrypt({ messageHash: engine.sighash(tx), signingPrivateKey: sess.localChildPrivateKey, adaptorPublicKey: sess.adaptorPoint, auxiliaryRandomness: coinjs.newPrivkey() });
 	};
 	/* Completed signature must carry the SIGHASH_ALL byte to be valid in a
 	   scriptSig; adaptor.complete() returns bare DER. */
-	engine.completeSig = function (asig, secret) { return coinjs.adaptor.complete({ adaptorSignature: asig, adaptorSecret: secret }).hex + '01'; };
+		/* The completed signature needs the SAME trailing sighash byte the rest of
+	   the transaction was signed with, or the script fails on BCH. */
+	engine.completeSig = function (asig, secret, sigHashType) {
+		var shType = (sigHashType == null) ? 1 : sigHashType;
+		return coinjs.adaptor.complete({ adaptorSignature: asig, adaptorSecret: secret }).hex + ('0' + shType.toString(16)).slice(-2);
+	};
 	/* parseDER reads by DER length fields, so a trailing sighash byte on the
 	   completed signature (as extracted from a real scriptSig) is tolerated. */
 	engine.recoverSecret = function (asig, csig, Y) { return coinjs.adaptor.recover({ adaptorSignature: asig, completedSignature: Crypto.util.hexToBytes(csig), adaptorPublicKey: Y }); };
@@ -1062,7 +1221,7 @@
 	engine.getHistory = function () { try { return JSON.parse(localStorage.getItem(HK)) || []; } catch (e) { return []; } };
 	engine.recordTrade = function (s) {
 		var h = engine.getHistory();
-		h.unshift({ swapId: s.swapId, orderId: s.orderId, role: s.role, state: s.state, pair: 'ROD/LTC', rodAmount: s.terms.rodAmount, ltcAmount: s.terms.ltcAmount, rodFundingTxid: s.execution && s.execution.rodFunding && s.execution.rodFunding.txid || '', ltcFundingTxid: s.execution && s.execution.ltcFunding && s.execution.ltcFunding.txid || '', ltcClaimTxid: s.execution && s.execution.ltcClaim && s.execution.ltcClaim.txid || '', rodClaimTxid: s.execution && s.execution.rodClaim && s.execution.rodClaim.txid || '', completedAt: new Date().toISOString() });
+		h.unshift({ swapId: s.swapId, orderId: s.orderId, role: s.role, state: s.state, pair: (s.terms && s.terms.pair) || ('ROD/' + SWAP.DEFAULT_ALT_CHAIN), altChain: (s.terms && s.terms.altChain) || SWAP.DEFAULT_ALT_CHAIN, rodAmount: s.terms.rodAmount, altAmount: s.terms.altAmount, rodFundingTxid: s.execution && s.execution.rodFunding && s.execution.rodFunding.txid || '', altFundingTxid: s.execution && s.execution.altFunding && s.execution.altFunding.txid || '', altClaimTxid: s.execution && s.execution.altClaim && s.execution.altClaim.txid || '', rodClaimTxid: s.execution && s.execution.rodClaim && s.execution.rodClaim.txid || '', completedAt: new Date().toISOString() });
 		if (h.length > 100) h = h.slice(0, 100);
 		localStorage.setItem(HK, JSON.stringify(h));
 	};
@@ -1073,34 +1232,6 @@
 	/* Only OTC order names in the ROD name DB */
 	engine.OTC_NAME_REGEXP = '^d/otc-swap/';
 	engine.OTC_NAME_PREFIX = 'd/otc-swap/';
-
-	engine.scanNames = function (names) {
-		var d = $.Deferred(), offers = [], reports = [], pending = names.length;
-		if (!pending) {
-			d.resolve({ offers: [], reports: [] });
-			return d;
-		}
-		names.forEach(function (n) {
-			engine.nameLookup(n).then(function (v) {
-				var norm = engine.normalizeOffer(n, v);
-				if (norm.ok) {
-					offers.push(norm.offer);
-					reports.push({ name: n, ok: true, detail: 'ok · ' + norm.offer.side + ' ' + norm.offer.give + ' ROD / ' + norm.offer.want + ' LTC' });
-				} else {
-					reports.push({ name: n, ok: false, detail: norm.reason || 'rejected' });
-				}
-			}, function (err) {
-				var msg = (err && err.message) ? err.message : (typeof err === 'string' ? err : 'lookup failed');
-				reports.push({ name: n, ok: false, detail: msg });
-			}).always(function () {
-				if (--pending <= 0) {
-					engine.orderbook = offers;
-					d.resolve({ offers: offers, reports: reports });
-				}
-			});
-		});
-		return d;
-	};
 
 	/**
 	 * Query ROD name DB for OTC orders: name_scan with regexp ^d/otc-swap/
@@ -1167,15 +1298,27 @@
 						reports.push({
 							name: n,
 							ok: true,
-							detail: 'ok · ' + norm.offer.side + ' ' + norm.offer.give + ' ROD / ' + norm.offer.want + ' LTC'
+							detail: 'ok · ' + norm.offer.side + ' ' + norm.offer.give + ' ROD / ' + norm.offer.want + ' ' + norm.offer.altChain
 						});
 					} else {
 						reports.push({ name: n, ok: false, detail: norm.reason || 'rejected' });
 					}
 				}
 				if (!newInPage || list.length < pageSize || collected >= maxNames || !lastName) {
+					/* Stopping at maxNames means the book is INCOMPLETE. Saying so
+					   matters: a silently truncated scan renders as a normal, full
+					   orderbook, so a user can conclude an offer does not exist when
+					   it simply sat past the cap. */
+					var truncated = collected >= maxNames;
+					if (truncated) {
+						reports.push({
+							name: '(scan truncated)',
+							ok: false,
+							detail: 'stopped at maxNames=' + maxNames + ' — orderbook may be incomplete'
+						});
+					}
 					engine.orderbook = offers;
-					d.resolve({ offers: offers, reports: reports, scanned: collected, regexp: regexp });
+					d.resolve({ offers: offers, reports: reports, scanned: collected, regexp: regexp, truncated: truncated });
 					return;
 				}
 				/* Continue strictly after lastName */

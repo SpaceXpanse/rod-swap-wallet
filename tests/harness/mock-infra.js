@@ -28,17 +28,28 @@ function p2pkhScript(pubkeyHash) {
 function p2shScript(scriptHash) {
   return Buffer.concat([Buffer.from([0xa9, 0x14]), scriptHash, Buffer.from([0x87])]);
 }
+/* Base58 version bytes per chain, straight from each project's chainparams.
+   DOGE: PUBKEY_ADDRESS 30 (0x1e), SCRIPT_ADDRESS 22 (0x16). */
+const CHAIN_VERSIONS = {
+  ROD:  { pub: 0x3c, p2sh: 0x4b },
+  LTC:  { pub: 0x30, p2sh: 0x32 },
+  DOGE: { pub: 0x1e, p2sh: 0x16 },
+  BTC:  { pub: 0x00, p2sh: 0x05 },
+  BCH:  { pub: 0x00, p2sh: 0x05 }
+};
+const P2SH_VERSIONS = new Set(Object.values(CHAIN_VERSIONS).map((v) => v.p2sh));
+
 function addressToScript(address) {
   const payload = Buffer.from(bs58check.decode(address));
   const version = payload[0];
   const hash = payload.subarray(1);
-  // P2SH versions used by this app: ROD 0x4b, LTC 0x32. P2PKH: ROD 0x3c, LTC 0x30.
-  if (version === 0x4b || version === 0x32) return p2shScript(hash);
+  if (P2SH_VERSIONS.has(version)) return p2shScript(hash);
   return p2pkhScript(hash);
 }
 function scriptToAddress(scriptBuf, chain) {
-  const pubVer = chain === 'LTC' ? 0x30 : 0x3c;
-  const p2shVer = chain === 'LTC' ? 0x32 : 0x4b;
+  const versions = CHAIN_VERSIONS[chain] || CHAIN_VERSIONS.ROD;
+  const pubVer = versions.pub;
+  const p2shVer = versions.p2sh;
   if (scriptBuf.length === 25 && scriptBuf[0] === 0x76) {
     return bs58check.encode(Buffer.concat([Buffer.from([pubVer]), scriptBuf.subarray(3, 23)]));
   }
@@ -46,6 +57,18 @@ function scriptToAddress(scriptBuf, chain) {
     return bs58check.encode(Buffer.concat([Buffer.from([p2shVer]), scriptBuf.subarray(2, 22)]));
   }
   return '';
+}
+/* SCRIPT_VERIFY_LOW_S is in STANDARD_SCRIPT_VERIFY_FLAGS on both Litecoin and
+   Dogecoin, so a high-S signature is validly-signed but will NOT relay. The
+   mocks reject it, which is what turns "our signatures are low-S" from an
+   assumption into a proven property of every broadcast in this suite. */
+function isLowS(sigWithHashType) {
+  try {
+    const der = sigWithHashType.subarray(0, sigWithHashType.length - 1);
+    return secp256k1.Signature.fromDER(der).hasHighS() === false;
+  } catch (e) {
+    return false;
+  }
 }
 function verifyDerSig(sigWithHashType, msgHash, pubkey) {
   try {
@@ -57,9 +80,28 @@ function verifyDerSig(sigWithHashType, msgHash, pubkey) {
   }
 }
 
+/* Relay/mining policy each mock enforces before accepting a transaction.
+
+   DOGE numbers come from dogecoin/dogecoin v1.14.6+:
+     DEFAULT_MIN_RELAY_TX_FEE = 0.001 DOGE/kB =  100 koinu/byte
+     DEFAULT_BLOCK_MIN_TX_FEE = 0.01  DOGE/kB = 1000 koinu/byte
+     DEFAULT_HARD_DUST_LIMIT  = 100000 koinu, DEFAULT_DUST_LIMIT = 1000000
+   and GetDogecoinMinRelayFee() adds one flat softDust surcharge PER soft-dust
+   output on top of the size-proportional component. blockMinPerByte is not a
+   relay rule — it is recorded so the harness can assert that what we broadcast
+   would actually be MINED, not merely accepted into a mempool. */
+const CHAIN_POLICY = {
+  ROD:  { relayPerByte: 0,   hardDust: 546,    softDust: 0,       surcharge: 0,       blockMinPerByte: 0 },
+  LTC:  { relayPerByte: 1,   hardDust: 546,    softDust: 0,       surcharge: 0,       blockMinPerByte: 0 },
+  DOGE: { relayPerByte: 100, hardDust: 100000, softDust: 1000000, surcharge: 1000000, blockMinPerByte: 1000 },
+  BTC:  { relayPerByte: 1,   hardDust: 546,    softDust: 0,       surcharge: 0,       blockMinPerByte: 0 },
+  BCH:  { relayPerByte: 1,   hardDust: 546,    softDust: 0,       surcharge: 0,       blockMinPerByte: 0 }
+};
+
 class MockChain {
   constructor(name) {
-    this.name = name;              // 'ROD' | 'LTC'
+    this.name = name;              // 'ROD' | 'LTC' | 'DOGE'
+    this.policy = CHAIN_POLICY[name] || CHAIN_POLICY.ROD;
     this.utxos = new Map();        // 'txid:vout' -> {txid, vout, value, script(Buffer), address}
     this.txs = new Map();          // txid -> {hex, tx, vouts:[{value, script, address, spent}]}
     this.broadcasts = [];          // audit log: {txid, hex, valid, details}
@@ -94,6 +136,16 @@ class MockChain {
      CHECKMULTISIG inputs. */
   validateAndAccept(hex) {
     const details = [];
+    /* Bitcoin Cash: signatures must carry SIGHASH_FORKID and commit to the
+       BIP-143 preimage (bitcoinjs-lib's hashForWitnessV0 computes exactly
+       that). Verifying BCH with the legacy algorithm would make this mock
+       AGREE with a legacy-signing bug instead of catching it - the same trap
+       the Blockchair prevout mapping fell into. */
+    const forkId = this.name === 'BCH';
+    const expectedHashType = forkId ? 0x41 : 0x01;
+    const sighashFor = (tx, i, script, value) => forkId
+      ? tx.hashForWitnessV0(i, script, value, expectedHashType)
+      : tx.hashForSignature(i, script, expectedHashType);
     let tx;
     try {
       tx = Transaction.fromHex(hex);
@@ -135,11 +187,12 @@ class MockChain {
           return { ok: false, error: `input ${i}: pubkey hash mismatch`, details };
         }
         const hashType = sig[sig.length - 1];
-        if (hashType !== 0x01) return { ok: false, error: `input ${i}: unexpected hashtype ${hashType}`, details };
-        const sighash = tx.hashForSignature(i, utxo.script, hashType);
+        if (hashType !== expectedHashType) return { ok: false, error: `input ${i}: unexpected hashtype ${hashType} (expected ${expectedHashType})`, details };
+        const sighash = sighashFor(tx, i, utxo.script, utxo.value);
         if (!verifyDerSig(sig, sighash, pubkey)) {
           return { ok: false, error: `input ${i}: P2PKH signature INVALID`, details };
         }
+        if (!isLowS(sig)) return { ok: false, error: `input ${i}: non-canonical high-S signature (would not relay)`, details };
         details.push(`input ${i}: P2PKH signature valid (pubkey ${pubkey.toString('hex').slice(0, 16)}…)`);
       } else if (utxo.script[0] === 0xa9) {
         // P2SH: OP_0 <sig...> <redeemScript>
@@ -164,14 +217,15 @@ class MockChain {
         let pkIdx = 0;
         for (let s = 0; s < sigs.length; s++) {
           const hashType = sigs[s][sigs[s].length - 1];
-          if (hashType !== 0x01) return { ok: false, error: `input ${i}: sig ${s} unexpected hashtype`, details };
-          const sighash = tx.hashForSignature(i, redeem, hashType);
+          if (hashType !== expectedHashType) return { ok: false, error: `input ${i}: sig ${s} unexpected hashtype ${hashType} (expected ${expectedHashType})`, details };
+          const sighash = sighashFor(tx, i, redeem, utxo.value);
           let matched = false;
           while (pkIdx < pubkeys.length && !matched) {
             if (verifyDerSig(sigs[s], sighash, pubkeys[pkIdx])) matched = true;
             pkIdx++;
           }
           if (!matched) return { ok: false, error: `input ${i}: multisig sig ${s} INVALID or out of order`, details };
+          if (!isLowS(sigs[s])) return { ok: false, error: `input ${i}: multisig sig ${s} is high-S (would not relay)`, details };
         }
         details.push(`input ${i}: P2SH ${m}-of-${n} CHECKMULTISIG valid (${sigs.length} sigs verified in order)`);
       } else {
@@ -184,12 +238,40 @@ class MockChain {
     if (outputSum > inputSum) return { ok: false, error: `bad-txns-in-belowout (${inputSum} < ${outputSum})`, details };
     const fee = inputSum - outputSum;
     const bytes = hex.length / 2;
-    if (this.name === 'LTC' && fee < Math.ceil(bytes * 1)) {
-      // Litecoin Core min relay: 0.00001 LTC/kB = 1 lit per byte (rounded up)
-      return { ok: false, error: `min relay fee not met: ${fee} sats for ${bytes} bytes`, details };
-    }
+    const policy = this.policy;
+
+    /* Hard dust: on Dogecoin an output below DEFAULT_HARD_DUST_LIMIT makes the
+       whole transaction non-standard, and no amount of fee can rescue it. */
     for (const o of tx.outs) {
-      if (Number(o.value) > 0 && Number(o.value) < 546) return { ok: false, error: `dust output ${o.value}`, details };
+      if (Number(o.value) > 0 && Number(o.value) < policy.hardDust) {
+        return { ok: false, error: `dust output ${o.value} (hard limit ${policy.hardDust})`, details };
+      }
+    }
+
+    /* GetDogecoinMinRelayFee(): size component + flat surcharge per soft-dust
+       output. Degenerates to the plain per-byte floor on ROD and LTC. */
+    let softDustOutputs = 0;
+    if (policy.softDust > 0) {
+      for (const o of tx.outs) {
+        if (Number(o.value) < policy.softDust) softDustOutputs++;
+      }
+    }
+    const minRelay = Math.ceil(bytes * policy.relayPerByte) + (softDustOutputs * policy.surcharge);
+    if (fee < minRelay) {
+      return {
+        ok: false,
+        error: `min relay fee not met: ${fee} for ${bytes} bytes` +
+          (softDustOutputs ? ` + ${softDustOutputs} soft-dust output(s)` : '') + ` (need ${minRelay})`,
+        details
+      };
+    }
+    if (policy.blockMinPerByte > 0) {
+      const blockMin = Math.ceil(bytes * policy.blockMinPerByte);
+      if (fee < blockMin) {
+        details.push(`WARNING: fee ${fee} is under -blockmintxfee ${blockMin} — would relay but not be mined`);
+      } else {
+        details.push(`fee clears -blockmintxfee (${blockMin}) — miners with default policy would include it`);
+      }
     }
 
     // accept: spend inputs, add outputs, record spender for outspend lookups
@@ -359,6 +441,235 @@ function esploraServer(chain, port) {
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
 }
 
+/* BlockCypher-shaped mock (api.blockcypher.com/v1/doge/main).
+
+   Dogecoin has no public Esplora, so the wallet's default DOGE backend is
+   BlockCypher and the response shape is materially different: outputs carry a
+   `spent_by` field instead of a separate outspend endpoint, raw hex arrives
+   inline via ?includeHex=true, and broadcast is a JSON POST rather than a
+   plain-text body. Mocking THIS shape (rather than reusing the esplora mock)
+   is what proves the explorer adapter actually translates a non-Esplora
+   backend end-to-end, instead of only proving Dogecoin's version bytes. */
+function blockcypherServer(chain, port) {
+  const server = http.createServer(async (req, res) => {
+    if (req.method === 'OPTIONS') return sendText(res, '');
+    const url = new URL(req.url, 'http://x');
+    const parts = url.pathname.split('/').filter(Boolean);
+
+    const txPayload = (txid) => {
+      const rec = chain.txs.get(txid);
+      if (!rec) return null;
+      chain.spenders = chain.spenders || new Map();
+      const height = rec.acceptedAtHeight || chain.height;
+      return {
+        hash: txid,
+        block_height: height,
+        confirmations: chain.confirmationsOf(txid),
+        ver: rec.tx ? rec.tx.version : 1,
+        lock_time: rec.tx ? rec.tx.locktime : 0,
+        size: rec.hex ? rec.hex.length / 2 : 0,
+        fees: 0,
+        inputs: rec.tx
+          ? rec.tx.ins.map((i) => ({
+              prev_hash: Buffer.from(i.hash).reverse().toString('hex'),
+              output_index: i.index,
+              script: Buffer.from(i.script).toString('hex'),
+              sequence: i.sequence
+            }))
+          : [],
+        outputs: rec.vouts.map((v, n) => {
+          const out = {
+            value: v.value,
+            script: v.script.toString('hex'),
+            addresses: v.address ? [v.address] : []
+          };
+          /* BlockCypher OMITS spent_by entirely while an output is unspent —
+             it does not send an empty string. The adapter must treat absence
+             as "unspent", so the mock reproduces that exactly. */
+          const spender = chain.spenders.get(txid + ':' + n);
+          if (spender) out.spent_by = spender;
+          return out;
+        }),
+        hex: rec.hex || ''
+      };
+    };
+
+    // GET /  -> chain status
+    if (parts.length === 0) {
+      return sendJson(res, { name: chain.name.toLowerCase() + '/main', height: chain.height });
+    }
+    // GET /addrs/{addr}/balance
+    if (parts[0] === 'addrs' && parts[2] === 'balance') {
+      const addr = decodeURIComponent(parts[1]);
+      return sendJson(res, { address: addr, balance: chain.balance(addr), unconfirmed_balance: 0, final_balance: chain.balance(addr) });
+    }
+    // GET /addrs/{addr}?unspentOnly=true&includeScript=true
+    if (parts[0] === 'addrs' && parts.length === 2) {
+      const addr = decodeURIComponent(parts[1]);
+      const includeScript = url.searchParams.get('includeScript') === 'true';
+      return sendJson(res, {
+        address: addr,
+        balance: chain.balance(addr),
+        final_balance: chain.balance(addr),
+        txrefs: chain.utxosForAddress(addr).map((u) => {
+          const ref = {
+            tx_hash: u.txid,
+            block_height: chain.height,
+            tx_output_n: u.vout,
+            value: u.value,
+            spent: false,
+            confirmations: 1
+          };
+          if (includeScript) ref.script = u.script.toString('hex');
+          return ref;
+        })
+      });
+    }
+    // GET /txs/{txid}?includeHex=true
+    if (parts[0] === 'txs' && parts.length === 2 && req.method === 'GET') {
+      const payload = txPayload(decodeURIComponent(parts[1]));
+      if (!payload) return sendJson(res, { error: 'Transaction not found' }, 404);
+      if (url.searchParams.get('includeHex') !== 'true') delete payload.hex;
+      return sendJson(res, payload);
+    }
+    // POST /txs/push  {"tx":"<hex>"}
+    if (parts[0] === 'txs' && parts[1] === 'push' && req.method === 'POST') {
+      const body = await readBody(req);
+      let hex = '';
+      try {
+        hex = (JSON.parse(body).tx || '').trim();
+      } catch (e) {
+        return sendJson(res, { error: 'malformed push body' }, 400);
+      }
+      const r = chain.validateAndAccept(hex);
+      if (!r.ok) {
+        chain.broadcasts.push({ txid: '', hex, valid: false, details: [r.error] });
+        return sendJson(res, { error: r.error }, 400);
+      }
+      return sendJson(res, { tx: { hash: r.txid } });
+    }
+    sendJson(res, { error: 'not found' }, 404);
+  });
+  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
+}
+
+/* Blockchair-shaped mock (api.blockchair.com/bitcoin-cash).
+
+   Bitcoin Cash has no public Esplora and no BlockCypher support, so the
+   wallet's default BCH backend is Blockchair. The response shape is deeply
+   nested under data[key] with different endpoint patterns. Mocking THIS
+   shape (rather than reusing the esplora mock) is what proves the Blockchair
+   explorer adapter translates a non-Esplora backend end-to-end. */
+function blockchairServer(chain, port) {
+  const server = http.createServer(async (req, res) => {
+    if (req.method === 'OPTIONS') return sendText(res, '');
+    const url = new URL(req.url, 'http://x');
+    const parts = url.pathname.split('/').filter(Boolean);
+
+    // GET /stats -> { data: { blocks: height } }
+    if (parts[0] === 'stats' && parts.length === 1) {
+      return sendJson(res, { data: { blocks: chain.height } });
+    }
+    // GET /dashboards/address/{addr} -> { data: { addr: { address: {balance}, utxo: [] } } }
+    if (parts[0] === 'dashboards' && parts[1] === 'address' && parts.length === 3) {
+      const addr = decodeURIComponent(parts[2]);
+      /* limit is "{transactions},{utxo}" here. Honouring the utxo cap for real
+         is what makes a bare "?limit=0" fail loudly in this harness instead of
+         silently reporting every funded address as empty. */
+      const utxoCap = parseInt((url.searchParams.get('limit') || '').split(',')[1], 10);
+      const utxos = chain.utxosForAddress(addr).slice(0, isFinite(utxoCap) ? utxoCap : 100);
+      const data = {};
+      data[addr] = {
+        address: { balance: chain.balance(addr) },
+        utxo: utxos.map((u) => ({
+          transaction_hash: u.txid,
+          index: u.vout,
+          value: u.value,
+          block_id: chain.height
+        }))
+      };
+      return sendJson(res, { data: data });
+    }
+    // GET /dashboards/transaction/{txid} -> deeply nested tx data
+    if (parts[0] === 'dashboards' && parts[1] === 'transaction' && parts.length === 3) {
+      const txid = decodeURIComponent(parts[2]);
+      const rec = chain.txs.get(txid);
+      if (!rec) return sendJson(res, { data: null, context: { error: 'Transaction not found' } }, 404);
+      chain.spenders = chain.spenders || new Map();
+      const height = rec.acceptedAtHeight || chain.height;
+      /* Blockchair returns each input as the OUTPUT RECORD being consumed:
+         transaction_hash/index are the prevout, spending_* refer to this tx.
+         Emitting both correctly is what proves the adapter reads the prevout
+         from the right pair of fields. */
+      const inputs = rec.tx
+        ? rec.tx.ins.map((i, n) => ({
+            transaction_hash: Buffer.from(i.hash).reverse().toString('hex'),
+            index: i.index,
+            spending_transaction_hash: txid,
+            spending_index: n,
+            spending_signature_hex: Buffer.from(i.script).toString('hex'),
+            spending_sequence: i.sequence,
+            value: 0,
+            recipient: ''
+          }))
+        : [];
+      const outputs = rec.vouts.map((v, n) => {
+        const out = {
+          value: v.value,
+          script_hex: v.script.toString('hex'),
+          recipient: v.address || '',
+          spending_transaction_hash: ''
+        };
+        const spender = chain.spenders.get(txid + ':' + n);
+        if (spender) out.spending_transaction_hash = spender;
+        return out;
+      });
+      const data = {};
+      data[txid] = {
+        transaction: {
+          hash: txid,
+          block_id: height,
+          version: rec.tx ? rec.tx.version : 1,
+          lock_time: rec.tx ? rec.tx.locktime : 0,
+          size: rec.hex ? rec.hex.length / 2 : 0,
+          fee: 0
+        },
+        inputs: inputs,
+        outputs: outputs
+      };
+      return sendJson(res, { data: data });
+    }
+    // GET /raw/transaction/{txid} -> { data: { txid: { raw_transaction: hex } } }
+    if (parts[0] === 'raw' && parts[1] === 'transaction' && parts.length === 3) {
+      const txid = decodeURIComponent(parts[2]);
+      const rec = chain.txs.get(txid);
+      if (!rec || !rec.hex) return sendJson(res, { data: null, context: { error: 'Transaction not found' } }, 404);
+      const data = {};
+      data[txid] = { raw_transaction: rec.hex };
+      return sendJson(res, { data: data });
+    }
+    // POST /push/transaction  data=<hex> (form-encoded)
+    if (parts[0] === 'push' && parts[1] === 'transaction' && req.method === 'POST') {
+      const body = await readBody(req);
+      // body is form-encoded: data=<hex>
+      let hex = '';
+      const match = body.match(/(?:^|&)data=([^&]*)/);
+      if (match) hex = decodeURIComponent(match[1]).trim();
+      if (!hex) {
+        return sendJson(res, { context: { error: 'missing transaction hex' } }, 400);
+      }
+      const r = chain.validateAndAccept(hex);
+      if (!r.ok) {
+        chain.broadcasts.push({ txid: '', hex, valid: false, details: [r.error] });
+        return sendJson(res, { context: { error: r.error } }, 400);
+      }
+      return sendJson(res, { data: { transaction_hash: r.txid } });
+    }
+    sendJson(res, { context: { error: 'not found' } }, 404);
+  });
+  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
+}
+
 /* Minimal NIP-01 relay */
 function nostrRelay(port) {
   const events = [];
@@ -430,4 +741,4 @@ function staticServer(rootDir, port) {
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
 }
 
-module.exports = { MockChain, rodApiServer, esploraServer, nostrRelay, staticServer, addressToScript };
+module.exports = { MockChain, rodApiServer, esploraServer, blockcypherServer, blockchairServer, nostrRelay, staticServer, addressToScript, CHAIN_VERSIONS, CHAIN_POLICY };

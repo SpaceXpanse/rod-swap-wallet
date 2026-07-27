@@ -18,10 +18,10 @@
 		REFUNDS_READY: ['SIGNATURES_EXCHANGED'],
 		SIGNATURES_EXCHANGED: ['PREPARED'],
 		PREPARED: ['ALICE_ROD_FUNDED'],
-		ALICE_ROD_FUNDED: ['BOB_LTC_FUNDED'],
-		BOB_LTC_FUNDED: ['READY'],
-		READY: ['LTC_CLAIMED'],
-		LTC_CLAIMED: ['SECRET_RECOVERED'],
+		ALICE_ROD_FUNDED: ['BOB_ALT_FUNDED'],
+		BOB_ALT_FUNDED: ['READY'],
+		READY: ['ALT_CLAIMED'],
+		ALT_CLAIMED: ['SECRET_RECOVERED'],
 		SECRET_RECOVERED: ['ROD_CLAIMED'],
 		ROD_CLAIMED: ['COMPLETE'],
 		COMPLETE: []
@@ -32,9 +32,9 @@
 	   while the other was refunded. */
 	var REFUND_STATES = {
 		ROD_REFUND_BROADCAST: true,
-		LTC_REFUND_BROADCAST: true,
+		ALT_REFUND_BROADCAST: true,
 		ROD_REFUNDED: true,
-		LTC_REFUNDED: true,
+		ALT_REFUNDED: true,
 		REFUNDED: true,
 		PARTIALLY_SETTLED: true
 	};
@@ -177,29 +177,97 @@
 
 	/* Default settlement fees (decimal strings). ROD relays at a much higher
 	   fee floor than LTC (observed ~232 sat/B on mainnet). */
+	/* 0.00051900 was sized for a ~226-byte P2PKH FUNDING transaction
+	   (226 * 232 = 52,432). Claims and refunds spend a 2-of-2 P2SH output and
+	   are ~306 bytes, needing 306 * 232 = 70,992 - the old value was 169 sat/B
+	   against a 232 sat/B floor, i.e. 73% of the minimum. An unrelayable ROD
+	   REFUND during the refund window is not a delay, it is total loss of the
+	   ROD leg, and ROD's relayFloorPerByte of 0 means nothing rejected it. */
 	swapModule.DEFAULT_FEES = {
-		rodClaimFee: '0.00051900',
-		ltcClaimFee: '0.00001000',
-		rodRefundFee: '0.00051900',
-		ltcRefundFee: '0.00001000'
+		rodClaimFee: '0.00071000',
+		altClaimFee: '0.00001000',
+		rodRefundFee: '0.00071000',
+		altRefundFee: '0.00001000'
 	};
+
+	/* Per-alt-chain settlement fees.
+
+	   These are CANONICAL: both sides put them in the hashed terms and build
+	   byte-identical claim and refund transactions from them, so a mismatch
+	   does not merely overpay — it produces divergent sighashes and every
+	   exchanged signature becomes worthless.
+
+	   Litecoin keeps its historical 0.00001 LTC (~1 lit/vB over a ~300-byte
+	   settlement transaction, above Litecoin Core's relay floor).
+
+	   Dogecoin needs three orders of magnitude more. A 2-of-2 P2SH settlement
+	   transaction is ~305 bytes; at Dogecoin's recommended/mining rate of 1000
+	   koinu per byte that is ~305,000 koinu. We charge a flat 0.01 DOGE
+	   (1,000,000 koinu), which is Dogecoin Core's own RECOMMENDED_MIN_TX_FEE
+	   per kB and leaves ~3x headroom for signature-length variation. Paying the
+	   bare relay floor instead (100 koinu/B) would relay but be skipped by
+	   miners running the default -blockmintxfee, which on a swap is not a delay
+	   but a fund-loss risk: a claim that misses its refund deadline lets the
+	   counterparty take both legs. In fiat this is a fraction of a cent. */
+	swapModule.ALT_CHAIN_FEES = {
+		LTC: { claimFee: '0.00001000', refundFee: '0.00001000', fundingFee: '0.00001000' },
+		DOGE: { claimFee: '0.01000000', refundFee: '0.01000000', fundingFee: '0.01000000' },
+		/* BTC: 5000 sats ≈ 16 sat/byte for a ~306-byte 2-of-2 P2SH spend.
+		   Higher than LTC because BTC fee pressure is far more variable, and a
+		   settlement transaction that misses its refund deadline is a fund-loss
+		   event rather than a delay. This clears typical mempool congestion; in
+		   a sustained fee spike a swap may need the fee raised in a new session,
+		   which is the safe failure mode (both legs refund). */
+		BTC: { claimFee: '0.00005000', refundFee: '0.00005000', fundingFee: '0.00005000' },
+		/* BCH: 1000 sats. BCH has consistently low fees; same level as LTC. */
+		BCH: { claimFee: '0.00001000', refundFee: '0.00001000', fundingFee: '0.00001000' }
+	};
+
+	/* Fees for an alt chain. Throws rather than deriving a plausible-looking
+	   default: these values are canonical — both sides build byte-identical
+	   settlement transactions from them — so a guessed fee is not a small
+	   overpayment but a chain whose swaps may be unminable. Adding a chain must
+	   be a deliberate entry here, exactly as it must be in the policy table. */
+	swapModule.altFees = function(chainCode){
+		var code = chainCode || swapModule.DEFAULT_ALT_CHAIN;
+		var fees = swapModule.ALT_CHAIN_FEES[code];
+		if(!fees){
+			throw new Error('No settlement fees registered for chain: ' + code);
+		}
+		return fees;
+	};
+	/* The alt leg may run on any supported non-ROD chain. It is pinned into the
+	   canonical (hashed) terms so a counterparty cannot swap the chain out from
+	   under a signature: every funding address, refund address, claim plan and
+	   sighash below is derived from this one field. */
+	swapModule.DEFAULT_ALT_CHAIN = 'LTC';
+	swapModule.normalizeAltChain = function(chainCode){
+		var code = String(chainCode || '').toUpperCase();
+		if(code === 'ROD' || !CHAINS.definitions[code]){
+			return swapModule.DEFAULT_ALT_CHAIN;
+		}
+		return code;
+	};
+
 	swapModule.buildTerms = function(input){
 		var childIndex = input.childIndex;
 		var alicePublicKey = input.aliceChildPubKey;
 		var bobPublicKey = input.bobChildPubKey;
+		var altChain = swapModule.normalizeAltChain(input.altChain);
 		var canonicalTerms = {
 			swapId: input.swapId,
 			orderId: input.orderId,
-			pair: 'ROD/LTC',
+			altChain: altChain,
+			pair: 'ROD/' + altChain,
 			rodAmount: input.rodAmount,
-			ltcAmount: input.ltcAmount,
+			altAmount: input.altAmount,
 			sellerSwapXpub: input.sellerSwapXpub,
 			buyerSwapXpub: input.buyerSwapXpub,
 			childIndex: childIndex,
 			releaseRodHeight: parseInt(input.releaseRodHeight, 10),
 			aliceChildPubKey: alicePublicKey,
 			bobChildPubKey: bobPublicKey,
-			sellerLtcPayoutAddress: input.sellerLtcPayoutAddress,
+			sellerAltPayoutAddress: input.sellerAltPayoutAddress,
 			buyerRodPayoutAddress: input.buyerRodPayoutAddress,
 			/* Identity binding for the 5-field swapId */
 			sellerIdentity: input.sellerIdentity || '',
@@ -209,27 +277,27 @@
 			   LATE; Bob (funds LTC second) refunds EARLY — otherwise the secret
 			   holder could refund ROD and still claim LTC. */
 			refundRodHeight: parseInt(input.refundRodHeight, 10) || 0,
-			ltcRefundLockHeight: parseInt(input.ltcRefundLockHeight, 10) || 0,
+			altRefundLockHeight: parseInt(input.altRefundLockHeight, 10) || 0,
 			/* Confirmation-count acceptance gates */
 			rodConfirmations: parseInt(input.rodConfirmations, 10) || 1,
-			ltcConfirmations: parseInt(input.ltcConfirmations, 10) || 1,
+			altConfirmations: parseInt(input.altConfirmations, 10) || 1,
 			/* Settlement fees — canonical so both sides construct identical
 			   claim/refund sighashes */
 			rodClaimFee: input.rodClaimFee || swapModule.DEFAULT_FEES.rodClaimFee,
-			ltcClaimFee: input.ltcClaimFee || swapModule.DEFAULT_FEES.ltcClaimFee,
+			altClaimFee: input.altClaimFee || swapModule.altFees(altChain).claimFee,
 			rodRefundFee: input.rodRefundFee || swapModule.DEFAULT_FEES.rodRefundFee,
-			ltcRefundFee: input.ltcRefundFee || swapModule.DEFAULT_FEES.ltcRefundFee
+			altRefundFee: input.altRefundFee || swapModule.altFees(altChain).refundFee
 		};
 		/* Refund destinations derive from the swap child keys so both sides can
 		   compute them without extra message fields; each side's own wallet holds
 		   the matching private child key. */
 		canonicalTerms.sellerRodRefundAddress = CHAINS.publicKeyToAddress('ROD', alicePublicKey, 'legacy');
-		canonicalTerms.buyerLtcRefundAddress = CHAINS.publicKeyToAddress('LTC', bobPublicKey, 'legacy');
+		canonicalTerms.buyerAltRefundAddress = CHAINS.publicKeyToAddress(altChain, bobPublicKey, 'legacy');
 		canonicalTerms.termsHash = sha256Hex(stableStringify(canonicalTerms));
 		canonicalTerms.rodFunding = CHAINS.planFunding('ROD', [alicePublicKey, bobPublicKey], 2, canonicalTerms.rodAmount);
-		canonicalTerms.ltcFunding = CHAINS.planFunding('LTC', [alicePublicKey, bobPublicKey], 2, canonicalTerms.ltcAmount);
+		canonicalTerms.altFunding = CHAINS.planFunding(altChain, [alicePublicKey, bobPublicKey], 2, canonicalTerms.altAmount);
 		canonicalTerms.rodClaim = CHAINS.planClaim('ROD', canonicalTerms.rodFunding, canonicalTerms.buyerRodPayoutAddress, canonicalTerms.rodAmount, canonicalTerms.rodClaimFee);
-		canonicalTerms.ltcClaim = CHAINS.planClaim('LTC', canonicalTerms.ltcFunding, canonicalTerms.sellerLtcPayoutAddress, canonicalTerms.ltcAmount, canonicalTerms.ltcClaimFee);
+		canonicalTerms.altClaim = CHAINS.planClaim(altChain, canonicalTerms.altFunding, canonicalTerms.sellerAltPayoutAddress, canonicalTerms.altAmount, canonicalTerms.altClaimFee);
 		return canonicalTerms;
 	};
 
@@ -257,7 +325,7 @@
 		if(!session || !session.state){
 			throw new Error('Swap session is missing state');
 		}
-		var stateOrder = ['OPEN', 'NEGOTIATING', 'TERMS_ACCEPTED', 'REFUNDS_READY', 'SIGNATURES_EXCHANGED', 'PREPARED', 'ALICE_ROD_FUNDED', 'BOB_LTC_FUNDED', 'READY', 'LTC_CLAIMED', 'SECRET_RECOVERED', 'ROD_CLAIMED', 'COMPLETE'];
+		var stateOrder = ['OPEN', 'NEGOTIATING', 'TERMS_ACCEPTED', 'REFUNDS_READY', 'SIGNATURES_EXCHANGED', 'PREPARED', 'ALICE_ROD_FUNDED', 'BOB_ALT_FUNDED', 'READY', 'ALT_CLAIMED', 'SECRET_RECOVERED', 'ROD_CLAIMED', 'COMPLETE'];
 		if(REFUND_STATES[session.state]) return session; /* refund branch is terminal for auto-advance */
 		var currentIndex = stateOrder.indexOf(session.state);
 		var nextIndex = stateOrder.indexOf(nextState);
@@ -303,27 +371,28 @@
 		var terms = swapModule.buildTerms({
 			swapId: input.swapId,
 			orderId: input.orderId,
+			altChain: input.altChain,
 			rodAmount: input.rodAmount,
-			ltcAmount: input.ltcAmount,
+			altAmount: input.altAmount,
 			sellerSwapXpub: accountXpub(input.sellerSwapAccountKey),
 			buyerSwapXpub: accountXpub(input.buyerSwapAccountKey),
 			childIndex: sellerSwapKeys.childIndex,
 			releaseRodHeight: input.releaseRodHeight,
 			aliceChildPubKey: sellerSwapKeys.publicKey,
 			bobChildPubKey: buyerSwapKeys.publicKey,
-			sellerLtcPayoutAddress: input.sellerLtcPayoutAddress,
+			sellerAltPayoutAddress: input.sellerAltPayoutAddress,
 			buyerRodPayoutAddress: input.buyerRodPayoutAddress,
 			sellerIdentity: input.sellerIdentity,
 			buyerIdentity: input.buyerIdentity,
 			termsNonce: input.termsNonce,
 			refundRodHeight: input.refundRodHeight,
-			ltcRefundLockHeight: input.ltcRefundLockHeight,
+			altRefundLockHeight: input.altRefundLockHeight,
 			rodConfirmations: input.rodConfirmations,
-			ltcConfirmations: input.ltcConfirmations,
+			altConfirmations: input.altConfirmations,
 			rodClaimFee: input.rodClaimFee,
-			ltcClaimFee: input.ltcClaimFee,
+			altClaimFee: input.altClaimFee,
 			rodRefundFee: input.rodRefundFee,
-			ltcRefundFee: input.ltcRefundFee
+			altRefundFee: input.altRefundFee
 		});
 		var session = {
 			swapId: input.swapId,
@@ -460,22 +529,22 @@
 			swapId: swapId,
 			orderId: 'alice.rod/order-1',
 			rodAmount: '1000.00000000',
-			ltcAmount: '5.00000000',
+			altAmount: '5.00000000',
 			sellerSwapXpub: aliceAccount.xpub,
 			buyerSwapXpub: bobAccount.xpub,
 			childIndex: childIndex,
 			releaseRodHeight: 1500000,
 			aliceChildPubKey: aliceKeys.publicKey,
 			bobChildPubKey: bobKeys.publicKey,
-			sellerLtcPayoutAddress: CHAINS.publicKeyToAddress('LTC', aliceKeys.publicKey, 'legacy'),
+			sellerAltPayoutAddress: CHAINS.publicKeyToAddress(swapModule.DEFAULT_ALT_CHAIN, aliceKeys.publicKey, 'legacy'),
 			buyerRodPayoutAddress: CHAINS.publicKeyToAddress('ROD', bobKeys.publicKey, 'legacy'),
 			sellerIdentity: 'alice.rod',
 			buyerIdentity: 'bob.rod',
 			termsNonce: 'fixture-nonce-1',
 			refundRodHeight: 1500480,
-			ltcRefundLockHeight: 3100024,
+			altRefundLockHeight: 3100024,
 			rodConfirmations: 1,
-			ltcConfirmations: 1
+			altConfirmations: 1
 		});
 		return {
 			aliceAccount: aliceAccount,
@@ -494,26 +563,26 @@
 			swapId: fixtures.swapId,
 			orderId: 'alice.rod/order-1',
 			rodAmount: '1000.00000000',
-			ltcAmount: '5.00000000',
+			altAmount: '5.00000000',
 			sellerSwapXpub: fixtures.aliceAccount.xpub,
 			buyerSwapXpub: fixtures.bobAccount.xpub,
 			childIndex: fixtures.childIndex,
 			releaseRodHeight: 1500000,
 			aliceChildPubKey: fixtures.aliceKeys.publicKey,
 			bobChildPubKey: fixtures.bobKeys.publicKey,
-			sellerLtcPayoutAddress: fixtures.terms.sellerLtcPayoutAddress,
+			sellerAltPayoutAddress: fixtures.terms.sellerAltPayoutAddress,
 			buyerRodPayoutAddress: fixtures.terms.buyerRodPayoutAddress,
 			sellerIdentity: 'alice.rod',
 			buyerIdentity: 'bob.rod',
 			termsNonce: 'fixture-nonce-1',
 			refundRodHeight: 1500480,
-			ltcRefundLockHeight: 3100024,
+			altRefundLockHeight: 3100024,
 			rodConfirmations: 1,
-			ltcConfirmations: 1
+			altConfirmations: 1
 		});
 		var nameValidation = false;
 		try {
-			swapModule.validateRodNameRecord({ offer: true, pair: 'ROD/LTC' });
+			swapModule.validateRodNameRecord({ offer: true, pair: 'ROD/' + swapModule.DEFAULT_ALT_CHAIN });
 			nameValidation = true;
 		} catch(error){
 			nameValidation = false;
@@ -523,7 +592,7 @@
 			passed: fixtures.terms.termsHash === recomputedTerms.termsHash &&
 				fixtures.aliceKeys.publicKey !== fixtures.bobKeys.publicKey &&
 				!!fixtures.terms.sellerRodRefundAddress &&
-				!!fixtures.terms.buyerLtcRefundAddress &&
+				!!fixtures.terms.buyerAltRefundAddress &&
 				fixtures.terms.refundRodHeight > fixtures.terms.releaseRodHeight &&
 				nameValidation,
 			fixtures: fixtures
@@ -594,7 +663,7 @@
 						swapId: swapId,
 						orderId: orderId,
 						rodAmount: $('#otcRodAmount').val(),
-						ltcAmount: $('#otcLtcAmount').val(),
+						altAmount: $('#otcAltAmount').val(),
 						releaseRodHeight: $('#otcReleaseHeight').val(),
 						sellerSwapAccountKey: sellerSwapAccountKey,
 						buyerSwapAccountKey: buyerSwapAccountKey
@@ -603,9 +672,9 @@
 						version: 1,
 						type: 'otc-order',
 						seller: $('#otcSellerName').val(),
-						pair: 'ROD/LTC',
+						pair: 'ROD/' + swapModule.DEFAULT_ALT_CHAIN,
 						give: $('#otcRodAmount').val(),
-						want: $('#otcLtcAmount').val(),
+						want: $('#otcAltAmount').val(),
 						sellerSwapXpub: session.sellerSwapXpub,
 						buyerSwapXpub: session.buyerSwapXpub,
 						releaseRodHeight: parseInt($('#otcReleaseHeight').val(), 10),
@@ -614,7 +683,7 @@
 					$('#otcOfferJson').val(JSON.stringify(offerPayload, null, 2));
 					$('#otcCurrentSwapId').val(session.swapId);
 					$('#otcTermsJson').val(JSON.stringify(session.terms, null, 2));
-					$('#otcFundingEvidence').val(JSON.stringify({ rodFunding: session.terms.rodFunding, ltcFunding: session.terms.ltcFunding, rodClaim: session.terms.rodClaim, ltcClaim: session.terms.ltcClaim }, null, 2));
+					$('#otcFundingEvidence').val(JSON.stringify({ rodFunding: session.terms.rodFunding, altFunding: session.terms.altFunding, rodClaim: session.terms.rodClaim, altClaim: session.terms.altClaim }, null, 2));
 					self.renderSessions();
 					self.showStatus('Created OTC offer session with deterministic swap terms and planning evidence. The derived child private key stays only in this live page state and is stripped from local backups.', 'success');
 				} catch(error){
@@ -720,7 +789,7 @@
 				}
 				$('#otcCurrentSwapId').val(session.swapId);
 				$('#otcTermsJson').val(JSON.stringify(session.terms, null, 2));
-				$('#otcFundingEvidence').val(JSON.stringify({ rodFunding: session.terms.rodFunding, ltcFunding: session.terms.ltcFunding, rodClaim: session.terms.rodClaim, ltcClaim: session.terms.ltcClaim, timeline: session.timeline || [] }, null, 2));
+				$('#otcFundingEvidence').val(JSON.stringify({ rodFunding: session.terms.rodFunding, altFunding: session.terms.altFunding, rodClaim: session.terms.rodClaim, altClaim: session.terms.altClaim, timeline: session.timeline || [] }, null, 2));
 				$('#otcMessageEnvelope').val(session.messages && session.messages.length ? NOSTR.exportEnvelope(session.messages[session.messages.length - 1]) : '');
 			});
 		}

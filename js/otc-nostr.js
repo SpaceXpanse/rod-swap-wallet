@@ -16,27 +16,27 @@
 		swap_decline: true,
 		swap_terms: true,
 		swap_adaptor_point: true,
-		swap_ltc_adaptor_signature: true,
-		swap_ltc_normal_signature: true,
+		swap_alt_adaptor_signature: true,
+		swap_alt_normal_signature: true,
 		swap_rod_adaptor_signature: true,
 		swap_rod_normal_signature: true,
 		swap_rod_funded: true,
-		swap_ltc_funded: true,
+		swap_alt_funded: true,
 		swap_ready: true,
-		swap_ltc_claimed: true,
+		swap_alt_claimed: true,
 		swap_secret_recovered: true,
 		swap_rod_claimed: true,
 		swap_complete: true,
 		/* Pre-funding protocol: planned (signed, unbroadcast) funding txids,
 		   pre-signed timelocked refund exchange, and the PREPARED gate. */
 		swap_rod_funding_planned: true,
-		swap_ltc_funding_planned: true,
+		swap_alt_funding_planned: true,
 		swap_rod_refund_signature: true,
-		swap_ltc_refund_signature: true,
+		swap_alt_refund_signature: true,
 		swap_prepared: true,
 		/* Refund outcome notifications */
 		swap_rod_refund_broadcast: true,
-		swap_ltc_refund_broadcast: true,
+		swap_alt_refund_broadcast: true,
 		swap_refunded: true
 	};
 
@@ -172,8 +172,13 @@
 		if(computeEventId(eventObject) !== eventObject.id){
 			throw new Error('OTC Nostr envelope ID mismatch');
 		}
-		if(eventObject.sig && !schnorrVerify(eventObject.id, eventObject.pubkey, eventObject.sig)){
-			throw new Error('OTC Nostr event signature mismatch');
+		/* The signature is MANDATORY. event.id is a plain hash over the content
+		   and pubkey, so anyone can mint an event carrying an arbitrary pubkey
+		   with a matching id. Treating an absent sig as "nothing to check" let
+		   a stranger impersonate the pinned counterparty on every handler that
+		   trusts eventObject.pubkey. */
+		if(!eventObject.sig || !schnorrVerify(eventObject.id, eventObject.pubkey, eventObject.sig)){
+			throw new Error('OTC Nostr event signature missing or invalid');
 		}
 		var envelope = JSON.parse(eventObject.content);
 		if(envelope.version !== 1 || !MESSAGE_TYPES[envelope.type] || !envelope.swapId || typeof envelope.sequence !== 'number'){
@@ -267,7 +272,7 @@
 			swapId: 'nostr-fixture-swap',
 			type: 'swap_terms',
 			sequence: 2,
-			payload: { pair: 'ROD/LTC', releaseRodHeight: 1500000 },
+			payload: { pair: 'ROD/LTC', releaseRodHeight: 1500000 }, /* fixture only */
 			privateKeyHex: identity.privateKeyHex,
 			auxiliaryRandomnessHex: '0000000000000000000000000000000000000000000000000000000000000000'
 		});

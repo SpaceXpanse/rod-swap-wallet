@@ -9,15 +9,91 @@ $(function () {
 	if (!window.rodOtc || !window.rodOtc.swap) return;
 	var SWAP = rodOtc.swap, ENGINE = rodOtc.engine, STORAGE = rodOtc.storage, CHAINS = rodOtc.chains, NOSTR = rodOtc.nostr;
 	var $root = $('#otc'); if (!$root.length) return;
-	function esc(v) { return $('<span>').text(v == null ? '' : String(v)).html(); }
+	/* Escapes for BOTH text and attribute context. .text().html() serialises a
+	   text node, which per spec escapes only & < > and NBSP - NOT quotes - so
+	   every attr="'+esc(x)+'" in this file was an injection point. Order book
+	   rows are parsed from permissionless on-chain names and every key of that
+	   JSON reaches the DOM, so this was remotely reachable by anyone. */
+	function esc(v) {
+		return String(v == null ? '' : v)
+			.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+	}
 	function short(id) { return id ? id.slice(0, 12) + '…' : '—'; }
+
+	/* Key-order-independent serialisation, so two objects built by the same
+	   code on two machines compare equal. Used to prove that an incoming terms
+	   object differs from the locally rebuilt one in NO field other than an
+	   explicit whitelist. */
+	function canonicalJson(value) {
+		if (value === null || typeof value !== 'object') return JSON.stringify(value === undefined ? null : value);
+		if (Object.prototype.toString.call(value) === '[object Array]') {
+			return '[' + value.map(canonicalJson).join(',') + ']';
+		}
+		var keys = Object.keys(value).sort();
+		return '{' + keys.map(function (k) { return JSON.stringify(k) + ':' + canonicalJson(value[k]); }).join(',') + '}';
+	}
+	/* Every top-level field present in either object whose canonical value
+	   differs. Extra fields injected by a peer show up here too. */
+	function canonicalTermsDiff(localTerms, remoteTerms) {
+		var seen = {}, fields = [];
+		[localTerms || {}, remoteTerms || {}].forEach(function (o) {
+			Object.keys(o).forEach(function (k) { if (!seen[k]) { seen[k] = 1; fields.push(k); } });
+		});
+		return fields.filter(function (k) {
+			return canonicalJson((localTerms || {})[k]) !== canonicalJson((remoteTerms || {})[k]);
+		});
+	}
 	function ts() { return new Date().toLocaleTimeString(); }
-	function rate(rod, ltc) { var r = parseFloat(rod), l = parseFloat(ltc); return (r > 0 && l > 0) ? (l / r).toFixed(8) : '—'; }
+	function rate(rod, alt) { var r = parseFloat(rod), l = parseFloat(alt); return (r > 0 && l > 0) ? (l / r).toFixed(8) : '—'; }
 	var cfg = ENGINE.loadConfig();
+
+	/* Every supported counter chain, i.e. every coinjs network that is not ROD.
+	   Driven off the network table so registering a chain there is the only
+	   step needed to expose it in the UI. */
+	function altChainCodes() {
+		var codes = [];
+		for (var code in coinjs.networks) {
+			if (coinjs.networks.hasOwnProperty(code) && code !== 'ROD' && CHAINS.definitions[code]) {
+				codes.push(code);
+			}
+		}
+		return codes;
+	}
+
+	function altChainOptionsHtml() {
+		var codes = altChainCodes(), html = [];
+		for (var i = 0; i < codes.length; i++) {
+			var network = coinjs.networks[codes[i]];
+			html.push('<option value="' + esc(codes[i]) + '">' + esc(network.name || codes[i]) + ' (' + esc(codes[i]) + ')</option>');
+		}
+		return html.join('');
+	}
+
+	function altChainSettingsHtml(currentCfg) {
+		var codes = altChainCodes(), html = [];
+		for (var i = 0; i < codes.length; i++) {
+			var code = codes[i];
+			var chainCfg = ENGINE.altChainConfig(code, currentCfg);
+			var backends = [];
+			for (var driver in coinjs.explorer.drivers) {
+				if (coinjs.explorer.drivers.hasOwnProperty(driver)) {
+					backends.push('<option value="' + esc(driver) + '"' + (chainCfg.apiType === driver ? ' selected' : '') + '>' + esc(driver) + '</option>');
+				}
+			}
+			html.push(
+				'<label style="margin-top:8px">' + esc(code) + ' API</label>' +
+				'<input id="cfgAltApi_' + esc(code) + '" class="form-control js-alt-api" data-chain="' + esc(code) + '" value="' + esc(chainCfg.apiUrl || '') + '">' +
+				'<label style="margin-top:4px;font-weight:normal;font-size:11px">' + esc(code) + ' backend</label>' +
+				'<select id="cfgAltType_' + esc(code) + '" class="form-control js-alt-type" data-chain="' + esc(code) + '">' + backends.join('') + '</select>'
+			);
+		}
+		return html.join('');
+	}
 
 	/* ============ HTML ============ */
 	$root.html([
-		'<h2>ROD ↔ LTC OTC Swap</h2>',
+		'<h2>ROD ↔ ' + esc(altChainCodes().join(' / ')) + ' OTC Swap</h2>',
 		'<div id="otcWarn" class="alert alert-warning" style="display:none"><b>Wallet not loaded.</b> Open your wallet in the <a href="#" onclick="$(\'a[href=#wallet]\').tab(\'show\');return false">Wallet tab</a> first. Your wallet key is used for swap authentication and signing.</div>',
 		'<div id="otcWalletOk" class="alert alert-success" style="display:none"></div>',
 		'<div id="otcFlash" class="alert hidden"></div>',
@@ -39,7 +115,7 @@ $(function () {
 		/* Orderbook */
 		'<div class="otc-panel">',
 		'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">',
-		'<h4 style="margin:0">ROD/LTC Orderbook</h4>',
+		'<h4 style="margin:0">ROD Orderbook</h4>',
 		'<div><small id="otcBookTime" class="text-muted"></small> <button class="btn btn-default btn-xs" id="otcRefreshBook">Refresh</button></div>',
 		'</div>',
 		'<div class="row" style="margin-top:10px">',
@@ -51,7 +127,7 @@ $(function () {
 		'<div class="otc-panel" style="padding:16px;margin-top:18px">',
 		'<div style="font-size:11px;color:#9ec7db;text-transform:uppercase">Current price</div>',
 		'<div id="otcMidPrice" style="font-size:28px;font-weight:700;color:#fff;margin:6px 0">—</div>',
-		'<div style="font-size:11px;color:#9ec7db">LTC per ROD</div>',
+		'<div style="font-size:11px;color:#9ec7db"><span class="js-alt-unit">LTC</span> per ROD</div>',
 		'</div>',
 		'</div>',
 		'<div class="col-md-4">',
@@ -62,7 +138,7 @@ $(function () {
 		/* Expanded offers for selected price */
 		'<div id="otcBookDetail" style="display:none;margin-top:10px">',
 		'<h5 id="otcBookDetailTitle"></h5>',
-		'<table class="table otc-session-table"><thead><tr><th>Seller/Buyer</th><th>ROD</th><th>LTC</th><th>xpub</th><th></th></tr></thead><tbody id="otcBookDetailBody"></tbody></table>',
+		'<table class="table otc-session-table"><thead><tr><th>Seller/Buyer</th><th>ROD</th><th>Counter</th><th>Chain</th><th>xpub</th><th></th></tr></thead><tbody id="otcBookDetailBody"></tbody></table>',
 		'</div>',
 		'<div style="margin-top:10px">',
 		'<label style="font-size:12px">Orderbook source</label>',
@@ -98,9 +174,11 @@ $(function () {
 		'<h4>Create swap / order</h4>',
 		'<p class="text-muted" style="font-size:12px;margin-top:0">Post an open <b>order</b> with your terms, or <b>Take</b> an order on the Dashboard to start a swap directly.</p>',
 		'<div class="row"><div class="col-md-6">',
-		'<label>Your role</label><select id="nsRole" class="form-control"><option value="alice">I sell ROD for LTC</option><option value="bob">I buy ROD with LTC</option></select>',
+		'<label>Counter chain</label><select id="nsAltChain" class="form-control">' + altChainOptionsHtml() + '</select>',
+		'<p id="nsAltHint" class="text-muted" style="font-size:11px;margin:4px 0 0"></p>',
+		'<label>Your role</label><select id="nsRole" class="form-control"><option value="alice">I sell ROD for <span class="js-alt-unit">LTC</span></option><option value="bob">I buy ROD with <span class="js-alt-unit">LTC</span></option></select>',
 		'<label>ROD amount</label><input id="nsRod" class="form-control" value="1000.00000000">',
-		'<label>LTC amount</label><input id="nsLtc" class="form-control" value="5.00000000">',
+		'<label><span class="js-alt-unit">LTC</span> amount</label><input id="nsAlt" class="form-control" value="5.00000000">',
 		'<label>Release ROD height <small id="nsHeightHint" class="text-muted"></small></label><input id="nsRelease" class="form-control" value="" readonly>',
 		'<input id="nsOrderName" type="hidden" value="">',
 		'<input id="nsPeer" type="hidden" value="">',
@@ -141,7 +219,7 @@ $(function () {
 		'<div id="otcExecStatus" style="font-size:12px;margin-top:8px"></div>',
 		'<div class="btn-toolbar" style="margin-top:10px">',
 		'<button class="btn btn-primary btn-sm otcExecBtn" data-action="accept-offer">Accept swap</button> ',
-		'<button class="btn btn-success btn-sm otcExecBtn" data-action="claim-ltc">Accept: claim LTC</button> ',
+		'<button class="btn btn-success btn-sm otcExecBtn" data-action="claim-alt">Accept: claim <span class="js-alt-unit">LTC</span></button> ',
 		'<button class="btn btn-success btn-sm otcExecBtn" data-action="claim-rod">Accept: claim ROD</button> ',
 		'<button class="btn btn-warning btn-sm otcExecBtn" data-action="attempt-refund">Attempt refund</button> ',
 		'<button class="btn btn-default btn-sm otcExecBtn" data-action="refresh">Refresh confirmations</button>',
@@ -152,14 +230,14 @@ $(function () {
 
 		/* ============ HISTORY ============ */
 		'<div class="tab-pane" id="otcHist">',
-		'<div class="otc-panel"><h4>Trade history</h4><table class="table table-striped otc-session-table"><thead><tr><th>Date</th><th>ID</th><th>Role</th><th>ROD</th><th>LTC</th><th>State</th></tr></thead><tbody id="otcHistBody"></tbody></table><button class="btn btn-default btn-xs" id="otcClearHist">Clear</button></div></div>',
+		'<div class="otc-panel"><h4>Trade history</h4><table class="table table-striped otc-session-table"><thead><tr><th>Date</th><th>ID</th><th>Role</th><th>ROD</th><th>Counter</th><th>State</th></tr></thead><tbody id="otcHistBody"></tbody></table><button class="btn btn-default btn-xs" id="otcClearHist">Clear</button></div></div>',
 
 		/* ============ SETTINGS ============ */
 		'<div class="tab-pane" id="otcCfg">',
 		'<div class="row"><div class="col-md-6"><div class="otc-panel">',
 		'<h4>API servers</h4>',
 		'<label>ROD API</label><input id="cfgRodApi" class="form-control" value="' + esc(cfg.rodApiUrl) + '">',
-		'<label>LTC API</label><input id="cfgLtcApi" class="form-control" value="' + esc(cfg.ltcApiUrl) + '">',
+		altChainSettingsHtml(cfg),
 		'<h4 style="margin-top:14px">Nostr relays</h4>',
 		'<textarea id="cfgRelays" class="form-control" rows="3">' + esc((cfg.relays || ENGINE.DEFAULT_RELAYS).join('\n')) + '</textarea>',
 		'<button class="btn btn-primary btn-sm" id="cfgSaveApi" style="margin-top:10px">Save API & Relay settings</button>',
@@ -273,10 +351,33 @@ $(function () {
 		var dueBlock = parseInt(order && order.releaseRodHeight, 10);
 		return !!(dueBlock && chainHeight && dueBlock <= chainHeight);
 	}
+	/* Mid price is meaningless across counter chains, so it is computed per
+	   chain and kept here; the panel renders whichever chain is selected. */
+	var midByChain = {};
+	function renderMidPrice() {
+		var code = selectedAltChain();
+		$('#otcMidPrice').text(midByChain[code] || '—');
+	}
+	/* A full name_scan paginates up to maxNames. Three separate triggers fire
+	   refreshBook (OTC tab shown, Dashboard sub-tab shown, and the initial
+	   timeout), so without this guard opening the tab can launch several
+	   concurrent multi-page scans whose results race to overwrite each other. */
+	var scanning = false;
 	function refreshBook() {
+		if (scanning) return;
+		scanning = true;
 		$('#otcBookTime').text('Scanning ROD DB…');
 		$('#otcScanReport').html('<span class="text-muted">name_scan regexp <code>^d/otc-swap/</code> …</span>');
-		$.when(ENGINE.scanOtcOrdersFromDb({ regexp: ENGINE.OTC_NAME_REGEXP || '^d/otc-swap/' }), ENGINE.getRodHeight()).then(function (result, height) {
+		/* Height comes from the ROD API, the scan from the Core RPC proxy — two
+		   independent transports. Height is only used to filter expired orders
+		   (and already fails open at 0), so letting its failure reject the whole
+		   $.when would hide a perfectly good orderbook whenever the API is down. */
+		var heightPromise = $.Deferred();
+		ENGINE.getRodHeight().then(
+			function (h) { heightPromise.resolve(parseInt(h, 10) || 0); },
+			function () { heightPromise.resolve(0); }
+		);
+		$.when(ENGINE.scanOtcOrdersFromDb({ regexp: ENGINE.OTC_NAME_REGEXP || '^d/otc-swap/' }), heightPromise).then(function (result, height) {
 			var scanResult = result && result.offers ? result : (coinjs.isArray(result) ? result[0] : result);
 			var chainHeight = parseInt(height, 10) || 0;
 			var offers = (scanResult && scanResult.offers) ? scanResult.offers : [];
@@ -298,26 +399,57 @@ $(function () {
 			/* Group by price for ask/bid */
 			var asks = {}, bids = {};
 			activeOffers.forEach(function (o) {
-				var rod = parseFloat(o.give || o.rodAmount || 0), ltc = parseFloat(o.want || o.ltcAmount || 0);
-				if (rod <= 0 || ltc <= 0) return;
-				var price = (ltc / rod).toFixed(8);
+				var rod = parseFloat(o.give || o.rodAmount || 0), alt = parseFloat(o.want || o.altAmount || 0);
+				if (rod <= 0 || alt <= 0) return;
+				/* Key on the COUNTER CHAIN as well as the price. "5.0" DOGE per
+				   ROD and "5.0" LTC per ROD are unrelated prices for unrelated
+				   assets; merging them would sum their volumes into one row and
+				   let a user take a swap in an asset they did not choose. */
+				var chain = o.altChain || SWAP.DEFAULT_ALT_CHAIN;
+				var price = (alt / rod).toFixed(8);
+				var key = chain + '@' + price;
 				var side = (o.side === 'buy') ? bids : asks;
-				if (!side[price]) side[price] = { vol: 0, offers: [] };
-				side[price].vol += rod;
-				side[price].offers.push(o);
+				if (!side[key]) side[key] = { vol: 0, offers: [], price: price, chain: chain };
+				side[key].vol += rod;
+				side[key].offers.push(o);
 			});
 			renderBookSide('#otcAsks', asks, 'ask');
 			renderBookSide('#otcBids', bids, 'bid');
-			/* Mid price */
-			var askPrices = Object.keys(asks).map(Number).sort();
-			var bidPrices = Object.keys(bids).map(Number).sort().reverse();
-			var mid = '—';
-			if (askPrices.length && bidPrices.length) mid = ((askPrices[0] + bidPrices[0]) / 2).toFixed(8);
-			else if (askPrices.length) mid = askPrices[0].toFixed(8);
-			else if (bidPrices.length) mid = bidPrices[0].toFixed(8);
-			$('#otcMidPrice').text(mid);
+			/* Mid price, PER COUNTER CHAIN. Pooling every chain's prices into one
+			   list picks the globally lowest ask and highest bid regardless of
+			   asset — with a BTC book (~0.00005 BTC/ROD) and a DOGE book (~5
+			   DOGE/ROD) open at once, the "mid" was an average of two unrelated
+			   assets, displayed under a label naming only the selected chain. */
+			var priceList = function (book, chain) {
+				var out = [];
+				for (var k in book) {
+					if (book.hasOwnProperty(k) && book[k].chain === chain) out.push(Number(book[k].price));
+				}
+				return out;
+			};
+			var chainsSeen = {};
+			[asks, bids].forEach(function (book) {
+				for (var k in book) { if (book.hasOwnProperty(k)) chainsSeen[book[k].chain] = true; }
+			});
+			midByChain = {};
+			Object.keys(chainsSeen).forEach(function (chain) {
+				var askPrices = priceList(asks, chain).sort(function (x, y) { return x - y; });
+				var bidPrices = priceList(bids, chain).sort(function (x, y) { return y - x; });
+				if (askPrices.length && bidPrices.length) midByChain[chain] = ((askPrices[0] + bidPrices[0]) / 2).toFixed(8);
+				else if (askPrices.length) midByChain[chain] = askPrices[0].toFixed(8);
+				else if (bidPrices.length) midByChain[chain] = bidPrices[0].toFixed(8);
+			});
+			renderMidPrice();
 			var scanned = (scanResult && scanResult.scanned != null) ? scanResult.scanned : reports.length;
-			$('#otcBookTime').text(activeOffers.length + ' active offers · ' + expiredCount + ' expired filtered · h' + chainHeight + ' · ' + ts());
+			/* chainHeight 0 means the ROD API was unreachable. The scan is still
+			   valid, but nothing was expiry-filtered, so say that plainly rather
+			   than showing "0 expired" as if the book had been checked. */
+			$('#otcBookTime').text(
+				activeOffers.length + ' active offers · ' +
+				(chainHeight ? expiredCount + ' expired filtered · h' + chainHeight : 'height unavailable, expiry not filtered') +
+				(scanResult && scanResult.truncated ? ' · TRUNCATED' : '') +
+				' · ' + ts()
+			);
 			$('#otcBookDetail').hide();
 			if (reports.length) {
 				var visibleReports = reports.filter(function (report) {
@@ -339,14 +471,31 @@ $(function () {
 			$('#otcBookTime').text('Failed · ' + ts());
 			$('#otcScanReport').html('<span style="color:#f1334a">' + esc(msg) + ' — is ROD Core RPC / proxy connected?</span>');
 			$('#otcAsks,#otcBids').html('<tr><td colspan="3" class="text-muted" style="font-size:11px">Scan failed</td></tr>');
+			/* Clear the mid so a failed refresh cannot leave a stale price on screen. */
+			midByChain = {};
+			renderMidPrice();
+		}).always(function () {
+			scanning = false;
 		});
 	}
+	/* `grouped` is keyed "<CHAIN>@<price>"; each entry carries its own price and
+	   chain so rows stay per-asset. Cumulative volume is accumulated per chain,
+	   since summing ROD depth across different counter assets is meaningless. */
 	function renderBookSide(sel, grouped, side) {
-		var prices = Object.keys(grouped).map(Number).sort(side === 'ask' ? function (a, b) { return a - b; } : function (a, b) { return b - a; });
-		var cumul = 0, rows = [];
-		prices.forEach(function (p) {
-			var g = grouped[p.toFixed(8)]; cumul += g.vol;
-			rows.push('<tr class="otc-price-row" data-price="' + p.toFixed(8) + '" data-side="' + side + '"><td>' + p.toFixed(8) + '</td><td>' + g.vol.toFixed(2) + '</td><td>' + cumul.toFixed(2) + '</td></tr>');
+		var entries = [];
+		for (var key in grouped) {
+			if (grouped.hasOwnProperty(key)) entries.push(grouped[key]);
+		}
+		entries.sort(function (a, b) {
+			if (a.chain !== b.chain) return a.chain < b.chain ? -1 : 1;
+			return side === 'ask' ? (a.price - b.price) : (b.price - a.price);
+		});
+		var cumulByChain = {}, rows = [];
+		entries.forEach(function (g) {
+			cumulByChain[g.chain] = (cumulByChain[g.chain] || 0) + g.vol;
+			rows.push('<tr class="otc-price-row" data-price="' + esc(g.price) + '" data-chain="' + esc(g.chain) + '" data-side="' + side + '">' +
+				'<td>' + esc(g.price) + ' <span class="text-muted" style="font-size:10px">' + esc(g.chain) + '</span></td>' +
+				'<td>' + g.vol.toFixed(2) + '</td><td>' + cumulByChain[g.chain].toFixed(2) + '</td></tr>');
 		});
 		$(sel).html(rows.join('') || '<tr><td colspan="3" class="text-muted" style="font-size:11px">No ' + side + 's</td></tr>');
 	}
@@ -366,29 +515,51 @@ $(function () {
 	/* Click price row → show offers at that price */
 	$(document).on('click', '.otc-price-row', function () {
 		$('.otc-price-row').removeClass('active'); $(this).addClass('active');
-		var price = $(this).data('price'), side = $(this).data('side');
+		var price = String($(this).data('price')), side = $(this).data('side');
+		var chainCode = String($(this).data('chain') || SWAP.DEFAULT_ALT_CHAIN);
 		var matching = allOffers.filter(function (o) {
-			var rod = parseFloat(o.give || o.rodAmount || 0), ltc = parseFloat(o.want || o.ltcAmount || 0);
-			return rod > 0 && ltc > 0 && (ltc / rod).toFixed(8) === price;
+			var rod = parseFloat(o.give || o.rodAmount || 0), alt = parseFloat(o.want || o.altAmount || 0);
+			if (!(rod > 0 && alt > 0)) return false;
+			if ((o.altChain || SWAP.DEFAULT_ALT_CHAIN) !== chainCode) return false;
+			return (alt / rod).toFixed(8) === price;
 		});
-		$('#otcBookDetailTitle').text((side === 'ask' ? 'Sell' : 'Buy') + ' offers at ' + price + ' LTC/ROD');
+		$('#otcBookDetailTitle').text((side === 'ask' ? 'Sell' : 'Buy') + ' offers at ' + price + ' ' + chainCode + '/ROD');
 		$('#otcBookDetailBody').html(matching.map(function (o) {
 			var createdAt = o._createdAt ? '<div class="text-muted" style="font-size:10px">Created ' + esc(o._createdAt) + '</div>' : '';
 			var dueBlock = o._dueBlock ? '<div class="text-muted" style="font-size:10px">Due block ' + esc(o._dueBlock) + (currentRodHeight ? ' · ' + esc(o._dueBlock - currentRodHeight) + ' left' : '') + '</div>' : '';
-			return '<tr><td>' + esc(o.seller || o._name || '—') + createdAt + dueBlock + '</td><td>' + esc(o.give || o.rodAmount) + '</td><td>' + esc(o.want || o.ltcAmount) + '</td>' +
+			return '<tr><td>' + esc(o.seller || o._name || '—') + createdAt + dueBlock + '</td><td>' + esc(o.give || o.rodAmount) + '</td><td>' + esc(o.want || o.altAmount) + '</td>' +
+				'<td><span class="label label-default">' + esc(o.altChain || SWAP.DEFAULT_ALT_CHAIN) + '</span></td>' +
 				'<td><code style="font-size:10px">' + esc(short(o.sellerSwapXpub || o.buyerSwapXpub || '')) + '</code></td>' +
-				'<td><button class="btn btn-xs btn-primary otcTakeOffer" data-rod="' + esc(o.give || o.rodAmount) + '" data-ltc="' + esc(o.want || o.ltcAmount) + '" data-peer="' + esc(o.seller || o._name) + '" data-xpub="' + esc(o.sellerSwapXpub || o.buyerSwapXpub || '') + '" data-release="' + esc(o.releaseRodHeight || '') + '" data-side="' + esc(side) + '">Take</button></td></tr>';
+				'<td><button class="btn btn-xs btn-primary otcTakeOffer" data-rod="' + esc(o.give || o.rodAmount) + '" data-alt="' + esc(o.want || o.altAmount) + '" data-chain="' + esc(o.altChain || SWAP.DEFAULT_ALT_CHAIN) + '" data-peer="' + esc(o.seller || o._name) + '" data-xpub="' + esc(o.sellerSwapXpub || o.buyerSwapXpub || '') + '" data-release="' + esc(o.releaseRodHeight || '') + '" data-side="' + esc(side) + '">Take</button></td></tr>';
 		}).join(''));
 		$('#otcBookDetail').show();
 	});
+
+	/* Retitle every alt-chain-dependent label when the counter chain changes. */
+	function refreshAltChainLabels() {
+		var code = selectedAltChain();
+		$('.js-alt-unit').text(code);
+		$('#nsAltHint').text(coinjs.networks[code] ? (coinjs.networks[code].name + ' · ' + (CHAINS.supportsSegwit(code) ? 'SegWit available' : 'legacy P2SH only, no SegWit')) : '');
+		/* The mid-price panel is labelled "<chain> per ROD", so it must follow
+		   the selector rather than keep showing the previous chain's price. */
+		renderMidPrice();
+	}
+	$(document).on('change', '#nsAltChain', refreshAltChainLabels);
 
 	/* Take offer → fill counterparty fields and immediately start the swap */
 	var nsPrefillFromOrder = false;
 	$(document).on('click', '.otcTakeOffer', function () {
 		var $b = $(this);
 		nsPrefillFromOrder = true;
+		/* Set the counter chain before anything else: fees, dust limits, refund
+		   block counts and the payout address all derive from it. */
+		var offerChain = String($b.data('chain') || SWAP.DEFAULT_ALT_CHAIN);
+		if ($('#nsAltChain option[value="' + offerChain + '"]').length) {
+			$('#nsAltChain').val(offerChain);
+			refreshAltChainLabels();
+		}
 		$('#nsRod').val($b.data('rod'));
-		$('#nsLtc').val($b.data('ltc'));
+		$('#nsAlt').val($b.data('alt'));
 		$('#nsPeer').val($b.data('peer') || '');
 		$('#nsPeerXpub').val($b.data('xpub') || '');
 		/* Payout address = counterparty identity (same address) */
@@ -496,7 +667,7 @@ $(function () {
 			return '<div class="otc-swap-card" data-id="' + esc(id) + '">' +
 				'<span class="label label-' + cls + '">' + esc(s.state) + '</span> ' +
 				'<code>' + esc(short(id)) + '</code> · ' + esc(s.role === 'alice' ? 'Seller' : 'Buyer') +
-				' · ' + esc(s.terms.rodAmount) + ' ROD / ' + esc(s.terms.ltcAmount) + ' LTC' +
+				' · ' + esc(s.terms.rodAmount) + ' ROD / ' + esc(s.terms.altAmount) + ' ' + esc(altChainOf(s)) +
 				' <button class="btn btn-xs btn-default otcRmSwap pull-right" data-id="' + esc(id) + '">×</button></div>';
 		}).join(''));
 	}
@@ -535,28 +706,28 @@ $(function () {
 			['Role', esc(s.role === 'alice' ? 'Seller (Alice)' : 'Buyer (Bob)')],
 			['Decision', decisionSummary(s)],
 			['ROD amount', esc(s.terms.rodAmount)],
-			['LTC amount', esc(s.terms.ltcAmount)],
-			['Rate', esc(rate(s.terms.rodAmount, s.terms.ltcAmount)) + ' LTC/ROD'],
+			[esc(altChainOf(s)) + ' amount', esc(s.terms.altAmount)],
+			['Rate', esc(rate(s.terms.rodAmount, s.terms.altAmount)) + ' ' + esc(altChainOf(s)) + '/ROD'],
 			['Bilateral ready', s.bilateralReady ? '<span class="label label-success">yes</span>' : '<span class="label label-default">no</span>'],
 			['Local readiness', readinessSummary(readiness.local)],
 			['Remote readiness', readinessSummary(readiness.remote)],
 			['Release height', esc(s.terms.releaseRodHeight)],
 			['ROD refund height', esc(s.terms.refundRodHeight || '—') + (s.rodRefund && s.rodRefund.signedHex ? ' · <span class="label label-success">refund signed</span>' : ' · <span class="label label-default">refund pending</span>')],
-			['LTC refund height', esc(s.terms.ltcRefundLockHeight || '—') + (s.ltcRefund && s.ltcRefund.signedHex ? ' · <span class="label label-success">refund signed</span>' : ' · <span class="label label-default">refund pending</span>')],
+			[esc(altChainOf(s)) + ' refund height', esc(s.terms.altRefundLockHeight || '—') + (s.altRefund && s.altRefund.signedHex ? ' · <span class="label label-success">refund signed</span>' : ' · <span class="label label-default">refund pending</span>')],
 			['Planned ROD funding', s.plannedRodFunding ? '<code style="font-size:10px">' + esc(short(s.plannedRodFunding.txid)) + '</code>' : '<span class="text-muted">not planned</span>'],
-			['Planned LTC funding', s.plannedLtcFunding ? '<code style="font-size:10px">' + esc(short(s.plannedLtcFunding.txid)) + '</code>' : '<span class="text-muted">not planned</span>'],
+			['Planned ' + esc(altChainOf(s)) + ' funding', s.plannedAltFunding ? '<code style="font-size:10px">' + esc(short(s.plannedAltFunding.txid)) + '</code>' : '<span class="text-muted">not planned</span>'],
 			['Prepared', (s.localPrepared ? '<span class="label label-success">local</span>' : '<span class="label label-default">local pending</span>') + ' ' + (s.remotePrepared ? '<span class="label label-success">remote</span>' : '<span class="label label-default">remote pending</span>')],
-			['Adaptor sigs', (s.localLtcAdaptorSignature || s.localRodAdaptorSignature ? '<span class="label label-success">local sent</span>' : '<span class="label label-default">local pending</span>') + ' ' + (s.remoteLtcAdaptorSignature || s.remoteRodAdaptorSignature ? '<span class="label label-success">remote verified</span>' : '<span class="label label-default">remote pending</span>')],
+			['Adaptor sigs', (s.localAltAdaptorSignature || s.localRodAdaptorSignature ? '<span class="label label-success">local sent</span>' : '<span class="label label-default">local pending</span>') + ' ' + (s.remoteAltAdaptorSignature || s.remoteRodAdaptorSignature ? '<span class="label label-success">remote verified</span>' : '<span class="label label-default">remote pending</span>')],
 			['Terms hash', '<code style="font-size:10px">' + esc(s.terms.termsHash) + '</code>'],
 			['Child index', esc(s.childIndex)],
 			['ROD multisig', '<code style="font-size:10px">' + esc(s.terms.rodFunding.multisigAddress) + '</code>'],
-			['LTC multisig', '<code style="font-size:10px">' + esc(s.terms.ltcFunding.multisigAddress) + '</code>'],
+			[esc(altChainOf(s)) + ' multisig', '<code style="font-size:10px">' + esc(s.terms.altFunding.multisigAddress) + '</code>'],
 			['ROD funding tx', txSummary(execution.rodFunding)],
-			['LTC funding tx', txSummary(execution.ltcFunding)],
-			['LTC claim tx', txSummary(execution.ltcClaim)],
+			[esc(altChainOf(s)) + ' funding tx', txSummary(execution.altFunding)],
+			[esc(altChainOf(s)) + ' claim tx', txSummary(execution.altClaim)],
 			['ROD claim tx', txSummary(execution.rodClaim)],
 			['Redeem (ROD)', '<code style="font-size:9px;word-break:break-all">' + esc(s.terms.rodFunding.redeemScript) + '</code>'],
-			['Redeem (LTC)', '<code style="font-size:9px;word-break:break-all">' + esc(s.terms.ltcFunding.redeemScript) + '</code>'],
+			['Redeem (' + esc(altChainOf(s)) + ')', '<code style="font-size:9px;word-break:break-all">' + esc(s.terms.altFunding.redeemScript) + '</code>'],
 			['Adaptor point', s.adaptorPoint ? '<code style="font-size:10px">' + esc(s.adaptorPoint) + '</code>' : '<span class="text-muted">not yet</span>'],
 			['Alice pubkey', '<code style="font-size:10px">' + esc(s.terms.aliceChildPubKey) + '</code>'],
 			['Bob pubkey', '<code style="font-size:10px">' + esc(s.terms.bobChildPubKey) + '</code>'],
@@ -595,14 +766,14 @@ $(function () {
 		if (!session.declined && !session.localAccepted && session.state !== 'COMPLETE') {
 			$('.otcExecBtn[data-action="accept-offer"]').show();
 		}
-		if (session.role === 'alice' && session.localAccepted && session.state !== 'COMPLETE' && !(execution.ltcClaim && execution.ltcClaim.txid)) {
-			$('.otcExecBtn[data-action="claim-ltc"]').show().prop('disabled', !ltcClaimReady(session));
+		if (session.role === 'alice' && session.localAccepted && session.state !== 'COMPLETE' && !(execution.altClaim && execution.altClaim.txid && !execution.altClaim.remoteOnly)) {
+			$('.otcExecBtn[data-action="claim-alt"]').show().prop('disabled', !altClaimReady(session));
 		}
-		if (session.role === 'bob' && session.localAccepted && session.state !== 'COMPLETE' && !(execution.rodClaim && execution.rodClaim.txid)) {
+		if (session.role === 'bob' && session.localAccepted && session.state !== 'COMPLETE' && !(execution.rodClaim && execution.rodClaim.txid && !execution.rodClaim.remoteOnly)) {
 			$('.otcExecBtn[data-action="claim-rod"]').show().prop('disabled', !rodClaimReady(session));
 		}
-		var ownRefund = session.role === 'alice' ? session.rodRefund : session.ltcRefund;
-		var ownFunding = session.role === 'alice' ? execution.rodFunding : execution.ltcFunding;
+		var ownRefund = session.role === 'alice' ? session.rodRefund : session.altRefund;
+		var ownFunding = session.role === 'alice' ? execution.rodFunding : execution.altFunding;
 		if (ownRefund && ownRefund.signedHex && ownFunding && ownFunding.txid && session.state !== 'COMPLETE') {
 			$('.otcExecBtn[data-action="attempt-refund"]').show();
 		}
@@ -612,14 +783,40 @@ $(function () {
 		var e = session.execution || {};
 		return [
 			'<div><b>ROD funding:</b> ' + txSummary(e.rodFunding) + '</div>',
-			'<div><b>LTC funding:</b> ' + txSummary(e.ltcFunding) + '</div>',
-			'<div><b>LTC claim:</b> ' + txSummary(e.ltcClaim) + '</div>',
+			'<div><b>' + esc(altChainOf(session)) + ' funding:</b> ' + txSummary(e.altFunding) + '</div>',
+			'<div><b>' + esc(altChainOf(session)) + ' claim:</b> ' + txSummary(e.altClaim) + '</div>',
 			'<div><b>ROD claim:</b> ' + txSummary(e.rodClaim) + '</div>'
 		].join('');
 	}
 
+	/* Every swap is ROD <-> one "alt" chain. Which alt chain is fixed in the
+	   canonical terms at negotiation time, so the entire execution path must
+	   read it from there instead of assuming Litecoin. Sessions persisted
+	   before multi-alt-chain support existed carry no altChain field and are
+	   therefore Litecoin by definition. */
+	var DEFAULT_ALT_CHAIN = 'LTC';
+
+	function altChainOf(sessionOrTerms) {
+		if (!sessionOrTerms) return DEFAULT_ALT_CHAIN;
+		var terms = sessionOrTerms.terms || sessionOrTerms;
+		var code = terms && terms.altChain;
+		return (code && CHAINS.definitions[code] && code !== 'ROD') ? code : DEFAULT_ALT_CHAIN;
+	}
+
+	/* Alt chain currently chosen in the New swap form (before any session or
+	   terms exist yet). */
+	function selectedAltChain() {
+		var code = $.trim($('#nsAltChain').val() || '');
+		return (code && CHAINS.definitions[code] && code !== 'ROD') ? code : DEFAULT_ALT_CHAIN;
+	}
+
+	function pairLabel(sessionOrTerms) {
+		return 'ROD/' + altChainOf(sessionOrTerms);
+	}
+
 	function fundingFee(chainCode) {
-		return chainCode === 'ROD' ? '0.00051900' : '0.00001000';
+		/* ROD funding is a ~226-byte P2PKH spend: 226 * 232 sat/B = 52,432. */
+		return chainCode === 'ROD' ? '0.00053000' : SWAP.altFees(chainCode).fundingFee;
 	}
 
 	/* Settlement fees come from canonical terms so both sides construct
@@ -628,20 +825,20 @@ $(function () {
 	function claimFee(session, chainCode) {
 		var terms = session && session.terms || {};
 		if (chainCode === 'ROD') return terms.rodClaimFee || SWAP.DEFAULT_FEES.rodClaimFee;
-		return terms.ltcClaimFee || SWAP.DEFAULT_FEES.ltcClaimFee;
+		return terms.altClaimFee || SWAP.altFees(chainCode).claimFee;
 	}
 
 	function refundFee(session, chainCode) {
 		var terms = session && session.terms || {};
 		if (chainCode === 'ROD') return terms.rodRefundFee || SWAP.DEFAULT_FEES.rodRefundFee;
-		return terms.ltcRefundFee || SWAP.DEFAULT_FEES.ltcRefundFee;
+		return terms.altRefundFee || SWAP.altFees(chainCode).refundFee;
 	}
 
 	/* Planned (signed, unbroadcast) funding is the single source of truth for
 	   every dependent transaction: refunds, adaptor sigs and claims all spend
 	   the planned outpoint, and the on-chain funding is later gated to match. */
 	function plannedFunding(session, chainCode) {
-		return chainCode === 'ROD' ? session.plannedRodFunding : session.plannedLtcFunding;
+		return chainCode === 'ROD' ? session.plannedRodFunding : session.plannedAltFunding;
 	}
 
 	function claimTxFor(session, chainCode) {
@@ -654,16 +851,16 @@ $(function () {
 		var planned = plannedFunding(session, chainCode);
 		if (!planned || !planned.txid) throw new Error(chainCode + ' planned funding is missing');
 		var terms = session.terms;
-		var destination = chainCode === 'ROD' ? terms.sellerRodRefundAddress : terms.buyerLtcRefundAddress;
-		var lockHeight = chainCode === 'ROD' ? terms.refundRodHeight : terms.ltcRefundLockHeight;
+		var destination = chainCode === 'ROD' ? terms.sellerRodRefundAddress : terms.buyerAltRefundAddress;
+		var lockHeight = chainCode === 'ROD' ? terms.refundRodHeight : terms.altRefundLockHeight;
 		if (!destination) throw new Error(chainCode + ' refund destination missing from terms');
 		if (!lockHeight) throw new Error(chainCode + ' refund lock height missing from terms');
 		return ENGINE.buildRefundTxFromFunding(chainCode, planned, fundingTarget(session, chainCode).redeemScript, destination, refundFee(session, chainCode), lockHeight);
 	}
 
-	function ltcClaimReady(session) {
-		return !!(session.remoteLtcAdaptorSignature && session.adaptorSecret && session.plannedLtcFunding &&
-			session.execution && session.execution.ltcFunding && session.execution.ltcFunding.verifiedLocally);
+	function altClaimReady(session) {
+		return !!(session.remoteAltAdaptorSignature && session.adaptorSecret && session.plannedAltFunding &&
+			session.execution && session.execution.altFunding && session.execution.altFunding.verifiedLocally);
 	}
 
 	function rodClaimReady(session) {
@@ -752,14 +949,14 @@ $(function () {
 		return d.promise();
 	}
 
-	function ensureWalletFundsForRole(role, rodAmount, ltcAmount) {
+	function ensureWalletFundsForRole(role, rodAmount, altAmount, altChain) {
 		var d = $.Deferred();
 		if (!walletId || !walletId.wif) {
 			d.reject('Open your wallet first');
 			return d.promise();
 		}
-		var requiredChain = role === 'alice' ? 'ROD' : 'LTC';
-		var requiredAmount = role === 'alice' ? rodAmount : ltcAmount;
+		var requiredChain = role === 'alice' ? 'ROD' : (altChain || selectedAltChain());
+		var requiredAmount = role === 'alice' ? rodAmount : altAmount;
 		var requiredUnits = decimalToBaseUnits(requiredAmount);
 		if (!requiredUnits || requiredUnits === '0') {
 			d.reject('Enter a positive ' + requiredChain + ' amount');
@@ -787,9 +984,9 @@ $(function () {
 		return d.promise();
 	}
 
-	function buildLocalReadinessUnchecked(role, rodAmount, ltcAmount, reason) {
-		var requiredChain = role === 'alice' ? 'ROD' : 'LTC';
-		var requiredAmount = role === 'alice' ? rodAmount : ltcAmount;
+	function buildLocalReadinessUnchecked(role, rodAmount, altAmount, reason, altChain) {
+		var requiredChain = role === 'alice' ? 'ROD' : (altChain || selectedAltChain());
+		var requiredAmount = role === 'alice' ? rodAmount : altAmount;
 		return {
 			role: role,
 			chain: requiredChain,
@@ -801,12 +998,12 @@ $(function () {
 		};
 	}
 
-	function readinessRoleChain(role) {
-		return role === 'alice' ? 'ROD' : 'LTC';
+	function readinessRoleChain(role, altChain) {
+		return role === 'alice' ? 'ROD' : (altChain || selectedAltChain());
 	}
 
 	function readinessRequiredAmount(session, role) {
-		return role === 'alice' ? session.terms.rodAmount : session.terms.ltcAmount;
+		return role === 'alice' ? session.terms.rodAmount : session.terms.altAmount;
 	}
 
 	function readinessSummary(readiness) {
@@ -818,7 +1015,7 @@ $(function () {
 	}
 
 	function readinessMatches(session, readiness, expectedRole) {
-		return !!(readiness && readiness.role === expectedRole && readiness.chain === readinessRoleChain(expectedRole) && readiness.requiredAmount === readinessRequiredAmount(session, expectedRole));
+		return !!(readiness && readiness.role === expectedRole && readiness.chain === readinessRoleChain(expectedRole, altChainOf(session)) && readiness.requiredAmount === readinessRequiredAmount(session, expectedRole));
 	}
 
 	function saveLocalReadiness(session, readiness, note) {
@@ -931,15 +1128,15 @@ $(function () {
 	}
 
 	function fundingTarget(session, chainCode) {
-		return chainCode === 'ROD' ? session.terms.rodFunding : session.terms.ltcFunding;
+		return chainCode === 'ROD' ? session.terms.rodFunding : session.terms.altFunding;
 	}
 
 	function payoutDestinationLabel(chainCode) {
-		return chainCode === 'ROD' ? 'buyer ROD wallet address' : 'seller LTC wallet address';
+		return chainCode === 'ROD' ? 'buyer ROD wallet address' : 'seller ' + chainCode + ' wallet address';
 	}
 
 	function claimDestination(session, chainCode) {
-		var address = chainCode === 'LTC' ? session.terms.sellerLtcPayoutAddress : session.terms.buyerRodPayoutAddress;
+		var address = chainCode === altChainOf(session) ? session.terms.sellerAltPayoutAddress : session.terms.buyerRodPayoutAddress;
 		if (!address) throw new Error('Missing ' + payoutDestinationLabel(chainCode) + ' in swap terms');
 		return address;
 	}
@@ -951,13 +1148,13 @@ $(function () {
 
 	function verifyFunding(session, chainCode, manualTxid) {
 		var target = fundingTarget(session, chainCode);
-		var txid = $.trim(manualTxid || (session.execution && session.execution[chainCode === 'ROD' ? 'rodFunding' : 'ltcFunding'] && session.execution[chainCode === 'ROD' ? 'rodFunding' : 'ltcFunding'].txid) || '');
+		var txid = $.trim(manualTxid || (session.execution && session.execution[chainCode === 'ROD' ? 'rodFunding' : 'altFunding'] && session.execution[chainCode === 'ROD' ? 'rodFunding' : 'altFunding'].txid) || '');
 		if (!txid) return $.Deferred().reject(new Error('Enter or receive ' + chainCode + ' funding txid first')).promise();
 		return ENGINE.findFundingOutput(chainCode, txid, target.multisigAddress, target.amount).then(function (evidence) {
 			/* Set ONLY here: this browser checked the chain API itself.
 			   Remote evidence messages have this flag stripped on receipt. */
 			evidence.verifiedLocally = true;
-			saveExecution(session, chainCode === 'ROD' ? 'rodFunding' : 'ltcFunding', evidence);
+			saveExecution(session, chainCode === 'ROD' ? 'rodFunding' : 'altFunding', evidence);
 			return evidence;
 		});
 	}
@@ -982,17 +1179,68 @@ $(function () {
 		showActiveSwap(session.swapId);
 	}
 
-	var STATE_ORDER = ['OPEN', 'NEGOTIATING', 'TERMS_ACCEPTED', 'REFUNDS_READY', 'SIGNATURES_EXCHANGED', 'PREPARED', 'ALICE_ROD_FUNDED', 'BOB_LTC_FUNDED', 'READY', 'LTC_CLAIMED', 'SECRET_RECOVERED', 'ROD_CLAIMED', 'COMPLETE'];
+	var STATE_ORDER = ['OPEN', 'NEGOTIATING', 'TERMS_ACCEPTED', 'REFUNDS_READY', 'SIGNATURES_EXCHANGED', 'PREPARED', 'ALICE_ROD_FUNDED', 'BOB_ALT_FUNDED', 'READY', 'ALT_CLAIMED', 'SECRET_RECOVERED', 'ROD_CLAIMED', 'COMPLETE'];
 	function stateRank(state) { return STATE_ORDER.indexOf(state); }
 	function isTerminal(session) {
 		return !session || session.declined || session.state === 'COMPLETE' ||
 			session.state === 'REFUNDED' || session.state === 'PARTIALLY_SETTLED' ||
-			session.state === 'ROD_REFUNDED' || session.state === 'LTC_REFUNDED';
+			session.state === 'ROD_REFUNDED' || session.state === 'ALT_REFUNDED';
+	}
+
+	/* True while this client still holds a pre-signed refund for a funding
+	   output it believes is unspent. Refund monitoring MUST survive terminal
+	   states: 'declined' and 'COMPLETE' are both reachable from a counterparty
+	   message, and a stalled swap whose refund never fires is total loss. */
+	function refundStillOwed(sess) {
+		var execution = (sess && sess.execution) || {};
+		var aliceOwed = sess && sess.role === 'alice' && sess.rodRefund && sess.rodRefund.signedHex &&
+			!(execution.rodRefund && execution.rodRefund.txid && !execution.rodRefund.remoteOnly);
+		var bobOwed = sess && sess.role === 'bob' && sess.altRefund && sess.altRefund.signedHex &&
+			!(execution.altRefund && execution.altRefund.txid && !execution.altRefund.remoteOnly);
+		return !!(aliceOwed || bobOwed);
+	}
+
+	/* COMPLETE is terminal, and terminal stops most automation, so it must be
+	   established from the chain rather than from a message. The counterparty
+	   saying "complete" is only a prompt to go and look: if the ROD funding
+	   output really is spent, the ROD leg was claimed and this swap is over. */
+	function confirmCompletionOnChain(sess) {
+		if (!sess || !sess.terms || !sess.terms.rodFunding || !sess.plannedRodFunding || !sess.plannedRodFunding.txid) return;
+		if (sess.state === 'COMPLETE') return;
+		if (!markAutomationBusy(sess, 'confirmComplete')) return;
+		ENGINE.isOutpointUnspent('ROD', sess.terms.rodFunding.multisigAddress, sess.plannedRodFunding.txid, 0).then(function (status) {
+			clearAutomationBusy(sess, 'confirmComplete');
+			if (status && status.unspent) {
+				slog(sess.swapId, 'Counterparty reported COMPLETE but the ROD funding output is still unspent — ignoring');
+				return;
+			}
+			var live = ENGINE.restoreLive(sess.swapId) || sess;
+			/* Another path (pollRodSpend) may have completed this swap while
+			   the request above was in flight; safeAdvance would then no-op
+			   and the naive state check would record a SECOND history row. */
+			var wasAlreadyComplete = live.state === 'COMPLETE';
+			['SECRET_RECOVERED', 'ROD_CLAIMED', 'COMPLETE'].forEach(function (target) {
+				try { SWAP.safeAdvance(live, target, 'ROD funding output confirmed spent on chain'); } catch (advanceError) {}
+			});
+			ENGINE.saveLive(live);
+			if (!wasAlreadyComplete && live.state === 'COMPLETE') {
+				ENGINE.recordTrade(live);
+				slog(live.swapId, '✓ COMPLETE (ROD funding output verified spent on chain)');
+				refreshHistory();
+			}
+			refreshSwaps(); showActiveSwap(live.swapId);
+		}, function (error) {
+			clearAutomationBusy(sess, 'confirmComplete');
+			slog(sess.swapId, 'Completion check failed: ' + errorString(error));
+		});
 	}
 
 	function autoContinueSwap(session) {
 		var latest = ENGINE.restoreLive(session.swapId) || session;
-		if (isTerminal(latest)) return;
+		if (isTerminal(latest)) {
+			if (refundStillOwed(latest)) checkRefunds(latest);
+			return;
+		}
 		if (SWAP.REFUND_STATES[latest.state]) { checkRefunds(latest); return; }
 		var bothAccepted = !!(latest.localAccepted && latest.remoteAccepted);
 		if (bothAccepted && latest.state === 'NEGOTIATING') {
@@ -1033,23 +1281,23 @@ $(function () {
 			} catch (rodCosignError) { slog(sess.swapId, 'ROD refund countersign pending: ' + (rodCosignError.message || rodCosignError)); }
 		}
 		/* Alice: verify + countersign Bob's LTC refund */
-		if (sess.role === 'alice' && sess._pendingLtcRefundSig && !sess.ltcRefundCosigned && sess.plannedLtcFunding) {
+		if (sess.role === 'alice' && sess._pendingAltRefundSig && !sess.altRefundCosigned && sess.plannedAltFunding) {
 			try {
-				var ltcRefundTxA = refundTxFor(sess, 'LTC');
-				if (!ENGINE.verifyDerSig(ENGINE.sighash(ltcRefundTxA), terms.bobChildPubKey, sess._pendingLtcRefundSig)) {
-					slog(sess.swapId, '✗ Bob LTC refund signature failed verification — dropped');
-					sess._pendingLtcRefundSig = '';
+				var altRefundTxA = refundTxFor(sess, altChainOf(sess));
+				if (!ENGINE.verifyDerSig(ENGINE.sighash(altRefundTxA), terms.bobChildPubKey, sess._pendingAltRefundSig)) {
+					slog(sess.swapId, '✗ Bob ' + altChainOf(sess) + ' refund signature failed verification — dropped');
+					sess._pendingAltRefundSig = '';
 					ENGINE.saveLive(sess);
 				} else {
-					var aliceLtcRefundSig = ENGINE.signClaimTx('LTC', ltcRefundTxA, getLocalChildWif(sess, 'LTC'));
-					sess.ltcRefund = $.extend({}, sess.ltcRefund || {}, { remoteSig: sess._pendingLtcRefundSig, localSig: aliceLtcRefundSig, lockHeight: terms.ltcRefundLockHeight });
-					sess.ltcRefundCosigned = true;
-					sess._pendingLtcRefundSig = '';
+					var aliceAltRefundSig = ENGINE.signClaimTx(altChainOf(sess), altRefundTxA, getLocalChildWif(sess, altChainOf(sess)));
+					sess.altRefund = $.extend({}, sess.altRefund || {}, { remoteSig: sess._pendingAltRefundSig, localSig: aliceAltRefundSig, lockHeight: terms.altRefundLockHeight });
+					sess.altRefundCosigned = true;
+					sess._pendingAltRefundSig = '';
 					ENGINE.saveLive(sess);
-					publish(sess, 'swap_ltc_refund_signature', { from: 'alice', signature: aliceLtcRefundSig, txid: sess.plannedLtcFunding.txid, vout: 0, lockHeight: terms.ltcRefundLockHeight });
-					slog(sess.swapId, '✓ Verified + countersigned Bob LTC refund (locktime ' + terms.ltcRefundLockHeight + ')');
+					publish(sess, 'swap_alt_refund_signature', { from: 'alice', signature: aliceAltRefundSig, txid: sess.plannedAltFunding.txid, vout: 0, lockHeight: terms.altRefundLockHeight });
+					slog(sess.swapId, '✓ Verified + countersigned Bob ' + altChainOf(sess) + ' refund (locktime ' + terms.altRefundLockHeight + ')');
 				}
-			} catch (ltcCosignError) { slog(sess.swapId, 'LTC refund countersign pending: ' + (ltcCosignError.message || ltcCosignError)); }
+			} catch (altCosignError) { slog(sess.swapId, '' + altChainOf(sess) + ' refund countersign pending: ' + (altCosignError.message || altCosignError)); }
 		}
 		/* Alice: assemble her fully-signed ROD refund from Bob's countersig */
 		if (sess.role === 'alice' && sess._pendingRodRefundCosig && sess.rodRefund && sess.rodRefund.localSig && !sess.rodRefund.signedHex) {
@@ -1078,46 +1326,46 @@ $(function () {
 			} catch (rodAssembleError) { slog(sess.swapId, 'ROD refund assembly pending: ' + (rodAssembleError.message || rodAssembleError)); }
 		}
 		/* Bob: assemble his fully-signed LTC refund from Alice's countersig */
-		if (sess.role === 'bob' && sess._pendingLtcRefundCosig && sess.ltcRefund && sess.ltcRefund.localSig && !sess.ltcRefund.signedHex) {
+		if (sess.role === 'bob' && sess._pendingAltRefundCosig && sess.altRefund && sess.altRefund.localSig && !sess.altRefund.signedHex) {
 			try {
-				var ltcRefundTxB = refundTxFor(sess, 'LTC');
-				if (!ENGINE.verifyDerSig(ENGINE.sighash(ltcRefundTxB), terms.aliceChildPubKey, sess._pendingLtcRefundCosig)) {
-					slog(sess.swapId, '✗ Alice LTC refund countersignature failed verification — dropped');
-					sess._pendingLtcRefundCosig = '';
+				var altRefundTxB = refundTxFor(sess, altChainOf(sess));
+				if (!ENGINE.verifyDerSig(ENGINE.sighash(altRefundTxB), terms.aliceChildPubKey, sess._pendingAltRefundCosig)) {
+					slog(sess.swapId, '✗ Alice ' + altChainOf(sess) + ' refund countersignature failed verification — dropped');
+					sess._pendingAltRefundCosig = '';
 					ENGINE.saveLive(sess);
 				} else {
-					var ltcRefundOrdered = [sess._pendingLtcRefundCosig, sess.ltcRefund.localSig];
-					if (verifyClaimSignatures(sess, ltcRefundTxB, ltcRefundOrdered)) {
-						sess.ltcRefund.remoteSig = sess._pendingLtcRefundCosig;
-						ENGINE.applyMultisigSignatures('LTC', ltcRefundTxB, terms.ltcFunding.redeemScript, ltcRefundOrdered);
-						sess.ltcRefund.signedHex = ltcRefundTxB.serialize();
-						sess.ltcRefund.txid = txidOfHex(sess.ltcRefund.signedHex);
-						sess._pendingLtcRefundCosig = '';
+					var altRefundOrdered = [sess._pendingAltRefundCosig, sess.altRefund.localSig];
+					if (verifyClaimSignatures(sess, altRefundTxB, altRefundOrdered)) {
+						sess.altRefund.remoteSig = sess._pendingAltRefundCosig;
+						ENGINE.applyMultisigSignatures(altChainOf(sess), altRefundTxB, terms.altFunding.redeemScript, altRefundOrdered);
+						sess.altRefund.signedHex = altRefundTxB.serialize();
+						sess.altRefund.txid = txidOfHex(sess.altRefund.signedHex);
+						sess._pendingAltRefundCosig = '';
 						ENGINE.saveLive(sess);
-						slog(sess.swapId, '✓ LTC refund fully signed (' + short(sess.ltcRefund.txid) + ', locktime ' + terms.ltcRefundLockHeight + ') — LTC funding is now protected');
+						slog(sess.swapId, '✓ ' + altChainOf(sess) + ' refund fully signed (' + short(sess.altRefund.txid) + ', locktime ' + terms.altRefundLockHeight + ') — ' + altChainOf(sess) + ' funding is now protected');
 					} else {
-						sess._pendingLtcRefundCosig = '';
+						sess._pendingAltRefundCosig = '';
 						ENGINE.saveLive(sess);
-						slog(sess.swapId, '✗ Assembled LTC refund failed CHECKMULTISIG verification');
+						slog(sess.swapId, '✗ Assembled ' + altChainOf(sess) + ' refund failed CHECKMULTISIG verification');
 					}
 				}
-			} catch (ltcAssembleError) { slog(sess.swapId, 'LTC refund assembly pending: ' + (ltcAssembleError.message || ltcAssembleError)); }
+			} catch (altAssembleError) { slog(sess.swapId, '' + altChainOf(sess) + ' refund assembly pending: ' + (altAssembleError.message || altAssembleError)); }
 		}
 		/* Alice: verify Bob's LTC claim adaptor signature */
-		if (sess.role === 'alice' && sess._pendingLtcAdaptorSig && !sess.remoteLtcAdaptorSignature && sess.plannedLtcFunding && sess.adaptorPoint) {
+		if (sess.role === 'alice' && sess._pendingAltAdaptorSig && !sess.remoteAltAdaptorSignature && sess.plannedAltFunding && sess.adaptorPoint) {
 			try {
-				var ltcClaimTxV = claimTxFor(sess, 'LTC');
-				if (ENGINE.verifyAdaptorSig(ENGINE.sighash(ltcClaimTxV), terms.bobChildPubKey, sess.adaptorPoint, sess._pendingLtcAdaptorSig)) {
-					sess.remoteLtcAdaptorSignature = sess._pendingLtcAdaptorSig;
-					sess._pendingLtcAdaptorSig = '';
+				var altClaimTxV = claimTxFor(sess, altChainOf(sess));
+				if (ENGINE.verifyAdaptorSig(ENGINE.sighash(altClaimTxV), terms.bobChildPubKey, sess.adaptorPoint, sess._pendingAltAdaptorSig)) {
+					sess.remoteAltAdaptorSignature = sess._pendingAltAdaptorSig;
+					sess._pendingAltAdaptorSig = '';
 					ENGINE.saveLive(sess);
-					slog(sess.swapId, '✓ Verified Bob LTC claim adaptor signature (DLEQ + pre-signature)');
+					slog(sess.swapId, '✓ Verified Bob ' + altChainOf(sess) + ' claim adaptor signature (DLEQ + pre-signature)');
 				} else {
-					sess._pendingLtcAdaptorSig = '';
+					sess._pendingAltAdaptorSig = '';
 					ENGINE.saveLive(sess);
-					slog(sess.swapId, '✗ Bob LTC adaptor signature failed verification — dropped');
+					slog(sess.swapId, '✗ Bob ' + altChainOf(sess) + ' adaptor signature failed verification — dropped');
 				}
-			} catch (ltcAdaptorVerifyError) { slog(sess.swapId, 'LTC adaptor verify pending: ' + (ltcAdaptorVerifyError.message || ltcAdaptorVerifyError)); }
+			} catch (altAdaptorVerifyError) { slog(sess.swapId, '' + altChainOf(sess) + ' adaptor verify pending: ' + (altAdaptorVerifyError.message || altAdaptorVerifyError)); }
 		}
 		/* Bob: verify Alice's ROD claim adaptor signature */
 		if (sess.role === 'bob' && sess._pendingRodAdaptorSig && !sess.remoteRodAdaptorSignature && sess.plannedRodFunding && sess.adaptorPoint) {
@@ -1196,7 +1444,7 @@ $(function () {
 			}
 			/* Send ROD claim adaptor signature once the refund layer is safe:
 			   own refund fully signed and Bob's refund countersigned. */
-			if (sess.rodRefund && sess.rodRefund.signedHex && sess.plannedLtcFunding && sess.ltcRefundCosigned && sess.adaptorPoint && !sess.localRodAdaptorSignature) {
+			if (sess.rodRefund && sess.rodRefund.signedHex && sess.plannedAltFunding && sess.altRefundCosigned && sess.adaptorPoint && !sess.localRodAdaptorSignature) {
 				try {
 					var rodClaimTx = claimTxFor(sess, 'ROD');
 					var rodAdaptor = ENGINE.makeAdaptorSig(sess, rodClaimTx);
@@ -1209,7 +1457,7 @@ $(function () {
 				return true;
 			}
 			/* PREPARED gate */
-			if (sess.localRodAdaptorSignature && sess.remoteLtcAdaptorSignature && sess.rodRefund && sess.rodRefund.signedHex && !sess.localPrepared) {
+			if (sess.localRodAdaptorSignature && sess.remoteAltAdaptorSignature && sess.rodRefund && sess.rodRefund.signedHex && !sess.localPrepared) {
 				SWAP.safeAdvance(sess, 'SIGNATURES_EXCHANGED', 'Adaptor signatures exchanged and verified');
 				SWAP.safeAdvance(sess, 'PREPARED', 'All pre-funding requirements verified');
 				sess.localPrepared = true;
@@ -1224,52 +1472,52 @@ $(function () {
 		/* --- Bob --- */
 		if (sess.role === 'bob') {
 			/* Plan LTC funding */
-			if (!sess.plannedLtcFunding && sess.bilateralReady) {
-				if (!markAutomationBusy(sess, 'planLtc')) return true;
-				ENGINE.buildFundingTx('LTC', requireWalletWif(), terms.ltcFunding.multisigAddress, terms.ltcAmount, fundingFee('LTC')).then(function (built) {
+			if (!sess.plannedAltFunding && sess.bilateralReady) {
+				if (!markAutomationBusy(sess, 'planAlt')) return true;
+				ENGINE.buildFundingTx(altChainOf(sess), requireWalletWif(), terms.altFunding.multisigAddress, terms.altAmount, fundingFee(altChainOf(sess))).then(function (built) {
 					var live = ENGINE.restoreLive(sess.swapId) || sess;
-					live.plannedLtcFunding = { txid: built.txid, vout: 0, value: CHAINS.decimalToSats(terms.ltcAmount), amount: terms.ltcAmount, txhex: built.txhex };
+					live.plannedAltFunding = { txid: built.txid, vout: 0, value: CHAINS.decimalToSats(terms.altAmount), amount: terms.altAmount, txhex: built.txhex };
 					ENGINE.saveLive(live);
-					publish(live, 'swap_ltc_funding_planned', { txid: built.txid, vout: 0, value: live.plannedLtcFunding.value, amount: terms.ltcAmount });
-					slog(live.swapId, '→ Planned LTC funding ' + short(built.txid) + ' (signed, NOT broadcast)');
-					clearAutomationBusy(sess, 'planLtc');
+					publish(live, 'swap_alt_funding_planned', { txid: built.txid, vout: 0, value: live.plannedAltFunding.value, amount: terms.altAmount });
+					slog(live.swapId, '→ Planned ' + altChainOf(live) + ' funding ' + short(built.txid) + ' (signed, NOT broadcast)');
+					clearAutomationBusy(sess, 'planAlt');
 					autoContinueSwap(live);
 				}).fail(function (error) {
-					clearAutomationBusy(sess, 'planLtc');
-					slog(sess.swapId, 'LTC funding planning blocked: ' + (error && error.message || error));
+					clearAutomationBusy(sess, 'planAlt');
+					slog(sess.swapId, '' + altChainOf(sess) + ' funding planning blocked: ' + (error && error.message || error));
 				});
 				return true;
 			}
 			/* Sign own LTC refund and send for countersignature */
-			if (sess.plannedLtcFunding && !(sess.ltcRefund && sess.ltcRefund.localSig)) {
+			if (sess.plannedAltFunding && !(sess.altRefund && sess.altRefund.localSig)) {
 				try {
-					var ltcRefundTx = refundTxFor(sess, 'LTC');
-					var ltcRefundSig = ENGINE.signClaimTx('LTC', ltcRefundTx, getLocalChildWif(sess, 'LTC'));
-					sess.ltcRefund = $.extend({}, sess.ltcRefund || {}, {
-						lockHeight: terms.ltcRefundLockHeight, destination: terms.buyerLtcRefundAddress,
-						fee: refundFee(sess, 'LTC'), localSig: ltcRefundSig
+					var altRefundTx = refundTxFor(sess, altChainOf(sess));
+					var altRefundSig = ENGINE.signClaimTx(altChainOf(sess), altRefundTx, getLocalChildWif(sess, altChainOf(sess)));
+					sess.altRefund = $.extend({}, sess.altRefund || {}, {
+						lockHeight: terms.altRefundLockHeight, destination: terms.buyerAltRefundAddress,
+						fee: refundFee(sess, altChainOf(sess)), localSig: altRefundSig
 					});
 					ENGINE.saveLive(sess);
-					publish(sess, 'swap_ltc_refund_signature', { from: 'bob', signature: ltcRefundSig, txid: sess.plannedLtcFunding.txid, vout: 0, value: sess.plannedLtcFunding.value, lockHeight: terms.ltcRefundLockHeight });
-					slog(sess.swapId, '→ Signed LTC refund (locktime ' + terms.ltcRefundLockHeight + '); requested Alice countersignature');
-				} catch (ltcRefundError) { slog(sess.swapId, 'LTC refund signing blocked: ' + (ltcRefundError.message || ltcRefundError)); }
+					publish(sess, 'swap_alt_refund_signature', { from: 'bob', signature: altRefundSig, txid: sess.plannedAltFunding.txid, vout: 0, value: sess.plannedAltFunding.value, lockHeight: terms.altRefundLockHeight });
+					slog(sess.swapId, '→ Signed ' + altChainOf(sess) + ' refund (locktime ' + terms.altRefundLockHeight + '); requested Alice countersignature');
+				} catch (altRefundError) { slog(sess.swapId, '' + altChainOf(sess) + ' refund signing blocked: ' + (altRefundError.message || altRefundError)); }
 				return true;
 			}
 			/* Send LTC claim adaptor signature */
-			if (sess.ltcRefund && sess.ltcRefund.signedHex && sess.plannedRodFunding && sess.rodRefundCosigned && sess.adaptorPoint && !sess.localLtcAdaptorSignature) {
+			if (sess.altRefund && sess.altRefund.signedHex && sess.plannedRodFunding && sess.rodRefundCosigned && sess.adaptorPoint && !sess.localAltAdaptorSignature) {
 				try {
-					var ltcClaimTx = claimTxFor(sess, 'LTC');
-					var ltcAdaptor = ENGINE.makeAdaptorSig(sess, ltcClaimTx);
-					sess.localLtcAdaptorSignature = ltcAdaptor.hex;
+					var altClaimTx = claimTxFor(sess, altChainOf(sess));
+					var altAdaptor = ENGINE.makeAdaptorSig(sess, altClaimTx);
+					sess.localAltAdaptorSignature = altAdaptor.hex;
 					SWAP.safeAdvance(sess, 'REFUNDS_READY', 'Both timelocked refunds pre-signed');
 					ENGINE.saveLive(sess);
-					publish(sess, 'swap_ltc_adaptor_signature', { hex: ltcAdaptor.hex, txid: sess.plannedLtcFunding.txid, vout: 0 });
-					slog(sess.swapId, '→ Sent LTC claim adaptor signature (encrypted to adaptor point)');
-				} catch (ltcAdaptorError) { slog(sess.swapId, 'LTC adaptor signing blocked: ' + (ltcAdaptorError.message || ltcAdaptorError)); }
+					publish(sess, 'swap_alt_adaptor_signature', { hex: altAdaptor.hex, txid: sess.plannedAltFunding.txid, vout: 0 });
+					slog(sess.swapId, '→ Sent ' + altChainOf(sess) + ' claim adaptor signature (encrypted to adaptor point)');
+				} catch (altAdaptorError) { slog(sess.swapId, '' + altChainOf(sess) + ' adaptor signing blocked: ' + (altAdaptorError.message || altAdaptorError)); }
 				return true;
 			}
 			/* PREPARED gate */
-			if (sess.localLtcAdaptorSignature && sess.remoteRodAdaptorSignature && sess.ltcRefund && sess.ltcRefund.signedHex && !sess.localPrepared) {
+			if (sess.localAltAdaptorSignature && sess.remoteRodAdaptorSignature && sess.altRefund && sess.altRefund.signedHex && !sess.localPrepared) {
 				SWAP.safeAdvance(sess, 'SIGNATURES_EXCHANGED', 'Adaptor signatures exchanged and verified');
 				SWAP.safeAdvance(sess, 'PREPARED', 'All pre-funding requirements verified');
 				sess.localPrepared = true;
@@ -1290,7 +1538,7 @@ $(function () {
 
 	/* ---- Stage 2: gated funding ----
 	   Alice broadcasts her PRE-SIGNED planned ROD funding only from PREPARED
-	   (with the counterparty also prepared). Bob broadcasts LTC only after the
+	   (with the counterparty also prepared). Bob broadcasts the alt leg only after the
 	   on-chain ROD funding txid matches the planned txid AND reaches the
 	   agreed confirmation count. */
 	function advanceFunding(sess) {
@@ -1298,7 +1546,7 @@ $(function () {
 		var terms = sess.terms;
 		var execution = sess.execution || {};
 		var rodFunding = execution.rodFunding || null;
-		var ltcFunding = execution.ltcFunding || null;
+		var altFunding = execution.altFunding || null;
 		if (sess.role === 'alice') {
 			if (!(rodFunding && rodFunding.txid)) {
 				if (!sess.remotePrepared) { slog(sess.swapId, 'Waiting for counterparty PREPARED before ROD funding broadcast'); return true; }
@@ -1341,25 +1589,25 @@ $(function () {
 				return true;
 			}
 			/* Verify Bob's LTC funding (must match his planned txid) → READY */
-			if (sess.plannedLtcFunding && !confirmedEnough(ltcFunding, terms.ltcConfirmations)) {
-				if (!markAutomationBusy(sess, 'verifyLtc')) return true;
-				verifyFunding(sess, 'LTC', sess.plannedLtcFunding.txid).then(function (evidence) {
+			if (sess.plannedAltFunding && !confirmedEnough(altFunding, terms.altConfirmations)) {
+				if (!markAutomationBusy(sess, 'verifyAlt')) return true;
+				verifyFunding(sess, altChainOf(sess), sess.plannedAltFunding.txid).then(function (evidence) {
 					var live = ENGINE.restoreLive(sess.swapId) || sess;
-					SWAP.safeAdvance(live, 'BOB_LTC_FUNDED', 'LTC funding verified on-chain');
-					if ((evidence.confirmations || 0) >= terms.ltcConfirmations) {
-						SWAP.safeAdvance(live, 'READY', 'LTC funding reached ' + terms.ltcConfirmations + ' confirmation(s)');
+					SWAP.safeAdvance(live, 'BOB_ALT_FUNDED', '' + altChainOf(live) + ' funding verified on-chain');
+					if ((evidence.confirmations || 0) >= terms.altConfirmations) {
+						SWAP.safeAdvance(live, 'READY', altChainOf(live) + ' funding reached ' + terms.altConfirmations + ' confirmation(s)');
 					}
 					ENGINE.saveLive(live);
-					slog(live.swapId, '✓ LTC funding verified · ' + (evidence.confirmations || 0) + '/' + terms.ltcConfirmations + ' confs');
-					clearAutomationBusy(sess, 'verifyLtc');
+					slog(live.swapId, '✓ ' + altChainOf(live) + ' funding verified · ' + (evidence.confirmations || 0) + '/' + terms.altConfirmations + ' confs');
+					clearAutomationBusy(sess, 'verifyAlt');
 					autoContinueSwap(live);
 				}).fail(function (error) {
-					clearAutomationBusy(sess, 'verifyLtc');
-					slog(sess.swapId, 'LTC funding verify pending: ' + (error && error.message || error));
+					clearAutomationBusy(sess, 'verifyAlt');
+					slog(sess.swapId, '' + altChainOf(sess) + ' funding verify pending: ' + (error && error.message || error));
 				});
 				return true;
 			}
-			if (confirmedEnough(ltcFunding, terms.ltcConfirmations) && stateRank(sess.state) < stateRank('READY')) {
+			if (confirmedEnough(altFunding, terms.altConfirmations) && stateRank(sess.state) < stateRank('READY')) {
 				SWAP.safeAdvance(sess, 'READY', 'Both fundings confirmed');
 				ENGINE.saveLive(sess);
 				return true;
@@ -1368,8 +1616,8 @@ $(function () {
 		}
 		if (sess.role === 'bob') {
 			/* Verify Alice's ROD funding (gate: on-chain txid == planned txid,
-			   confirmations >= agreed) before committing any LTC. */
-			if (!(ltcFunding && ltcFunding.txid)) {
+			   confirmations >= agreed) before committing any alt coin. */
+			if (!(altFunding && altFunding.txid)) {
 				if (!sess.plannedRodFunding) return false;
 				var rodOk = confirmedEnough(rodFunding, terms.rodConfirmations) && rodFunding.txid === sess.plannedRodFunding.txid;
 				if (!rodOk) {
@@ -1388,46 +1636,46 @@ $(function () {
 					return true;
 				}
 				/* Adaptor signature sanity re-check against the REAL funding */
-				if (!sess.remoteRodAdaptorSignature) { slog(sess.swapId, 'Missing Alice ROD adaptor signature; not funding LTC'); return true; }
-				if (!markAutomationBusy(sess, 'fundLtc')) return true;
-				ENGINE.broadcastTx('LTC', sess.plannedLtcFunding.txhex).then(function (response) {
+				if (!sess.remoteRodAdaptorSignature) { slog(sess.swapId, 'Missing Alice ROD adaptor signature; not funding ' + altChainOf(sess)); return true; }
+				if (!markAutomationBusy(sess, 'fundAlt')) return true;
+				ENGINE.broadcastTx(altChainOf(sess), sess.plannedAltFunding.txhex).then(function (response) {
 					var live = ENGINE.restoreLive(sess.swapId) || sess;
 					live.execution = live.execution || {};
-					live.execution.ltcFunding = {
-						txid: (response && response.txid) || live.plannedLtcFunding.txid, vout: 0,
-						value: live.plannedLtcFunding.value, amount: live.plannedLtcFunding.amount,
+					live.execution.altFunding = {
+						txid: (response && response.txid) || live.plannedAltFunding.txid, vout: 0,
+						value: live.plannedAltFunding.value, amount: live.plannedAltFunding.amount,
 						broadcastAt: new Date().toISOString()
 					};
-					SWAP.safeAdvance(live, 'BOB_LTC_FUNDED', 'LTC funding broadcast');
+					SWAP.safeAdvance(live, 'BOB_ALT_FUNDED', '' + altChainOf(live) + ' funding broadcast');
 					ENGINE.saveLive(live);
-					publish(live, 'swap_ltc_funded', { funding: { txid: live.execution.ltcFunding.txid, vout: 0, value: live.execution.ltcFunding.value, amount: live.execution.ltcFunding.amount } });
-					slog(live.swapId, '→ LTC funding broadcast ' + live.execution.ltcFunding.txid);
-					clearAutomationBusy(sess, 'fundLtc');
+					publish(live, 'swap_alt_funded', { funding: { txid: live.execution.altFunding.txid, vout: 0, value: live.execution.altFunding.value, amount: live.execution.altFunding.amount } });
+					slog(live.swapId, '→ ' + altChainOf(live) + ' funding broadcast ' + live.execution.altFunding.txid);
+					clearAutomationBusy(sess, 'fundAlt');
 					refreshSwaps(); showActiveSwap(live.swapId);
 					autoContinueSwap(live);
 				}).fail(function (error) {
-					clearAutomationBusy(sess, 'fundLtc');
-					slog(sess.swapId, 'LTC funding broadcast blocked: ' + (error && error.message || error));
+					clearAutomationBusy(sess, 'fundAlt');
+					slog(sess.swapId, '' + altChainOf(sess) + ' funding broadcast blocked: ' + (error && error.message || error));
 				});
 				return true;
 			}
 			/* Self-verify own LTC funding until confirmation target reached */
-			if (ltcFunding.txid && !confirmedEnough(ltcFunding, terms.ltcConfirmations)) {
-				if (!markAutomationBusy(sess, 'verifyLtcSelf')) return true;
-				verifyFunding(sess, 'LTC', sess.plannedLtcFunding.txid).then(function (evidence) {
+			if (altFunding.txid && !confirmedEnough(altFunding, terms.altConfirmations)) {
+				if (!markAutomationBusy(sess, 'verifyAltSelf')) return true;
+				verifyFunding(sess, altChainOf(sess), sess.plannedAltFunding.txid).then(function (evidence) {
 					var live = ENGINE.restoreLive(sess.swapId) || sess;
 					var cleanEvidence = $.extend({}, evidence); delete cleanEvidence.verifiedLocally;
-					publish(live, 'swap_ltc_funded', { funding: cleanEvidence });
-					if ((evidence.confirmations || 0) >= terms.ltcConfirmations) {
-						SWAP.safeAdvance(live, 'READY', 'LTC funding reached ' + terms.ltcConfirmations + ' confirmation(s)');
+					publish(live, 'swap_alt_funded', { funding: cleanEvidence });
+					if ((evidence.confirmations || 0) >= terms.altConfirmations) {
+						SWAP.safeAdvance(live, 'READY', altChainOf(live) + ' funding reached ' + terms.altConfirmations + ' confirmation(s)');
 						ENGINE.saveLive(live);
 					}
-					slog(live.swapId, '✓ Own LTC funding verified · ' + (evidence.confirmations || 0) + '/' + terms.ltcConfirmations + ' confs');
-					clearAutomationBusy(sess, 'verifyLtcSelf');
+					slog(live.swapId, '✓ Own ' + altChainOf(live) + ' funding verified · ' + (evidence.confirmations || 0) + '/' + terms.altConfirmations + ' confs');
+					clearAutomationBusy(sess, 'verifyAltSelf');
 					autoContinueSwap(live);
 				}).fail(function (error) {
-					clearAutomationBusy(sess, 'verifyLtcSelf');
-					slog(sess.swapId, 'Own LTC verify pending: ' + (error && error.message || error));
+					clearAutomationBusy(sess, 'verifyAltSelf');
+					slog(sess.swapId, 'Own ' + altChainOf(sess) + ' verify pending: ' + (error && error.message || error));
 				});
 				return true;
 			}
@@ -1437,8 +1685,8 @@ $(function () {
 	}
 
 	/* ---- Stage 3: atomic settlement ----
-	   Alice completes Bob's LTC adaptor signature with y and broadcasts the
-	   LTC claim (revealing y in the real signature). Bob recovers y from that
+	   Alice completes Bob's alt-leg adaptor signature with y and broadcasts the
+	   alt claim (revealing y in the real signature). Bob recovers y from that
 	   signature — via Nostr evidence or directly from the chain — completes
 	   Alice's ROD adaptor signature and claims ROD. */
 	function errorString(e) {
@@ -1457,7 +1705,7 @@ $(function () {
 			/* After LTC claim, poll ROD funding outpoint to detect Bob's
 			   ROD claim on-chain — the relay swap_complete message may be
 			   lost or rate-limited, so chain is the authoritative fallback. */
-			if (execution.ltcClaim && execution.ltcClaim.txid) {
+			if (execution.altClaim && execution.altClaim.txid && !execution.altClaim.remoteOnly) {
 				if (sess.state === 'COMPLETE') return false;
 				if (!markAutomationBusy(sess, 'pollRodSpend')) return true;
 				ENGINE.getOutspend('ROD', sess.plannedRodFunding.txid, 0).then(function (outspend) {
@@ -1481,67 +1729,89 @@ $(function () {
 				});
 				return true;
 			}
-			if (!confirmedEnough(execution.ltcFunding, terms.ltcConfirmations)) return false;
-			if (!sess.remoteLtcAdaptorSignature || !sess.adaptorSecret) return false;
-			if (!markAutomationBusy(sess, 'claimLtc')) return true;
+			if (!confirmedEnough(execution.altFunding, terms.altConfirmations)) return false;
+			if (!sess.remoteAltAdaptorSignature || !sess.adaptorSecret) return false;
+			if (!markAutomationBusy(sess, 'claimAlt')) return true;
 			ENGINE.getRodHeight().then(function (rodHeight) {
 				if (rodHeight < terms.releaseRodHeight) {
-					slog(sess.swapId, 'LTC claim waiting for release height ' + terms.releaseRodHeight + ' (current ' + rodHeight + ')');
-					clearAutomationBusy(sess, 'claimLtc');
+					slog(sess.swapId, '' + altChainOf(sess) + ' claim waiting for release height ' + terms.releaseRodHeight + ' (current ' + rodHeight + ')');
+					clearAutomationBusy(sess, 'claimAlt');
+					return;
+				}
+				/* Past the ROD refund height this client is in refund
+				   territory, and checkRefunds runs from the same tick on an
+				   independent lock. Claiming the alt leg here while the ROD
+				   refund is also in flight breaks atomicity: this side would
+				   take both legs and the counterparty's ROD claim would spend
+				   an output that has already been refunded. */
+				if (rodHeight >= terms.refundRodHeight) {
+					slog(sess.swapId, '' + altChainOf(sess) + ' claim abandoned: ROD refund height ' + terms.refundRodHeight + ' reached (current ' + rodHeight + ')');
+					clearAutomationBusy(sess, 'claimAlt');
 					return;
 				}
 				var live = ENGINE.restoreLive(sess.swapId) || sess;
 				try {
-					claimLtcAsAlice(live).then(function (evidence) {
+					claimAltAsAlice(live).then(function (evidence) {
 						var updated = ENGINE.restoreLive(live.swapId) || live;
-						SWAP.safeAdvance(updated, 'LTC_CLAIMED', 'LTC claimed with completed adaptor signature');
+						SWAP.safeAdvance(updated, 'ALT_CLAIMED', '' + altChainOf(updated) + ' claimed with completed adaptor signature');
 						ENGINE.saveLive(updated);
-						slog(updated.swapId, '✓ LTC claimed ' + evidence.txid + ' — adaptor secret is now revealed on-chain');
-						clearAutomationBusy(sess, 'claimLtc');
+						slog(updated.swapId, '✓ ' + altChainOf(updated) + ' claimed ' + evidence.txid + ' — adaptor secret is now revealed on-chain');
+						clearAutomationBusy(sess, 'claimAlt');
 						refreshSwaps(); showActiveSwap(updated.swapId);
 					}).fail(function (error) {
-						clearAutomationBusy(sess, 'claimLtc');
-						slog(sess.swapId, 'LTC claim blocked: ' + errorString(error));
+						clearAutomationBusy(sess, 'claimAlt');
+						slog(sess.swapId, '' + altChainOf(sess) + ' claim blocked: ' + errorString(error));
 					});
 				} catch (claimError) {
-					clearAutomationBusy(sess, 'claimLtc');
-					slog(sess.swapId, 'LTC claim blocked: ' + errorString(claimError));
+					clearAutomationBusy(sess, 'claimAlt');
+					slog(sess.swapId, '' + altChainOf(sess) + ' claim blocked: ' + errorString(claimError));
 				}
 			}, function (heightError) {
-				clearAutomationBusy(sess, 'claimLtc');
+				clearAutomationBusy(sess, 'claimAlt');
 				slog(sess.swapId, 'ROD height check failed: ' + errorString(heightError));
 			});
 			return true;
 		}
 		if (sess.role === 'bob') {
 			/* Recover the adaptor secret from the real LTC claim signature */
-			if (!sess.recoveredAdaptorSecret && sess.localLtcAdaptorSignature && execution.ltcFunding && execution.ltcFunding.txid) {
-				if (execution.ltcClaim && (execution.ltcClaim.completedSigHex || execution.ltcClaim.txhex)) {
-					if (tryRecoverFromEvidence(sess)) { autoContinueSwap(ENGINE.restoreLive(sess.swapId) || sess); }
-					return true;
+			if (!sess.recoveredAdaptorSecret && sess.localAltAdaptorSignature && execution.altFunding && execution.altFunding.txid) {
+				if (execution.altClaim && (execution.altClaim.completedSigHex || execution.altClaim.txhex)) {
+					/* Evidence is a shortcut, never a dead end. This used to
+					   return unconditionally, so a counterparty that published
+					   a parseable but unrelated txhex BEFORE really claiming
+					   permanently disabled the getOutspend fallback below and
+					   the secret was never recovered. Fall through on failure. */
+					if (tryRecoverFromEvidence(sess)) {
+						autoContinueSwap(ENGINE.restoreLive(sess.swapId) || sess);
+						return true;
+					}
+					slog(sess.swapId, 'Claim evidence did not yield the adaptor secret - falling back to on-chain outspend polling');
 				}
 				/* Chain fallback: poll the LTC funding outpoint spend status so
 				   recovery works even if every relay drops the notification. */
-				if (!markAutomationBusy(sess, 'pollLtcSpend')) return true;
-				ENGINE.getOutspend('LTC', sess.plannedLtcFunding.txid, 0).then(function (outspend) {
+				if (!markAutomationBusy(sess, 'pollAltSpend')) return true;
+				ENGINE.getOutspend(altChainOf(sess), sess.plannedAltFunding.txid, 0).then(function (outspend) {
 					if (!outspend || !outspend.spent || !outspend.txid) {
-						clearAutomationBusy(sess, 'pollLtcSpend');
+						clearAutomationBusy(sess, 'pollAltSpend');
 						return;
 					}
-					return ENGINE.getTxHex('LTC', outspend.txid).then(function (txhex) {
+					return ENGINE.getTxHex(altChainOf(sess), outspend.txid).then(function (txhex) {
 						var live = ENGINE.restoreLive(sess.swapId) || sess;
 						live.execution = live.execution || {};
-						live.execution.ltcClaim = $.extend({}, live.execution.ltcClaim || {}, { txid: outspend.txid, txhex: txhex });
+						live.execution.altClaim = $.extend({}, live.execution.altClaim || {}, { txid: outspend.txid, txhex: txhex });
 						ENGINE.saveLive(live);
-						slog(live.swapId, '← LTC claim discovered on-chain ' + short(outspend.txid));
-						clearAutomationBusy(sess, 'pollLtcSpend');
+						slog(live.swapId, '← ' + altChainOf(live) + ' claim discovered on-chain ' + short(outspend.txid));
+						clearAutomationBusy(sess, 'pollAltSpend');
 						if (tryRecoverFromEvidence(live)) autoContinueSwap(ENGINE.restoreLive(live.swapId) || live);
 					});
-				}).fail(function () { clearAutomationBusy(sess, 'pollLtcSpend'); });
+				}).fail(function () { clearAutomationBusy(sess, 'pollAltSpend'); });
 				return true;
 			}
 			/* Claim ROD with the recovered secret */
-			if (sess.recoveredAdaptorSecret && sess.remoteRodAdaptorSignature && !(execution.rodClaim && execution.rodClaim.txid)) {
+			/* A peer can publish swap_rod_claimed with a bogus txid. Without
+			   the remoteOnly test that message alone stopped Bob from ever
+			   claiming ROD, and Alice's refund then took both legs. */
+			if (sess.recoveredAdaptorSecret && sess.remoteRodAdaptorSignature && !(execution.rodClaim && execution.rodClaim.txid && !execution.rodClaim.remoteOnly)) {
 				if (!markAutomationBusy(sess, 'claimRod')) return true;
 				try {
 					claimRodAsBob(sess).then(function (evidence) {
@@ -1574,8 +1844,8 @@ $(function () {
 	   against the adaptor point (yG == Y, or the low-S negation), so a forged
 	   signature cannot inject a bogus secret. */
 	function tryRecoverFromEvidence(sess) {
-		if (sess.role !== 'bob' || sess.recoveredAdaptorSecret || !sess.localLtcAdaptorSignature) return false;
-		var evidence = sess.execution && sess.execution.ltcClaim;
+		if (sess.role !== 'bob' || sess.recoveredAdaptorSecret || !sess.localAltAdaptorSignature) return false;
+		var evidence = sess.execution && sess.execution.altClaim;
 		if (!evidence) return false;
 		var candidates = [];
 		if (evidence.completedSigHex) candidates.push(evidence.completedSigHex);
@@ -1589,13 +1859,13 @@ $(function () {
 		}
 		for (var c = 0; c < candidates.length; c++) {
 			try {
-				var recovered = ENGINE.recoverSecret(Crypto.util.hexToBytes(sess.localLtcAdaptorSignature), candidates[c], sess.adaptorPoint);
+				var recovered = ENGINE.recoverSecret(Crypto.util.hexToBytes(sess.localAltAdaptorSignature), candidates[c], sess.adaptorPoint);
 				sess.recoveredAdaptorSecret = recovered;
-				SWAP.safeAdvance(sess, 'LTC_CLAIMED', 'LTC claim observed');
-				SWAP.safeAdvance(sess, 'SECRET_RECOVERED', 'Adaptor secret recovered from the real LTC claim signature');
+				SWAP.safeAdvance(sess, 'ALT_CLAIMED', '' + altChainOf(sess) + ' claim observed');
+				SWAP.safeAdvance(sess, 'SECRET_RECOVERED', 'Adaptor secret recovered from the real ' + altChainOf(sess) + ' claim signature');
 				ENGINE.saveLive(sess);
 				publish(sess, 'swap_secret_recovered', { recovered: true });
-				slog(sess.swapId, '✓ Adaptor secret recovered from LTC claim signature (verified against adaptor point)');
+				slog(sess.swapId, '✓ Adaptor secret recovered from ' + altChainOf(sess) + ' claim signature (verified against adaptor point)');
 				refreshSwaps();
 				return true;
 			} catch (recoverError) { /* try next candidate */ }
@@ -1607,15 +1877,18 @@ $(function () {
 	/* ---- Stage 4: refund monitoring ----
 	   Runs when the swap is stalled. Broadcasts the PRE-SIGNED timelocked
 	   refund once the lock height passes and the funding output is still
-	   unspent. An honest Alice never refunds after claiming LTC. */
+	   unspent. An honest Alice never refunds after claiming the alt coin. */
 	function checkRefunds(sess) {
 		var terms = sess.terms;
 		var execution = sess.execution || {};
-		if (sess.state === 'COMPLETE') return;
+		/* Every gate below must key off LOCALLY established facts. A peer
+		   message that merely asserts "I claimed" or "you were refunded" used
+		   to satisfy these conditions and suppress the refund forever. The
+		   on-chain unspent check further down is the real authority. */
 		if (sess.role === 'alice' && sess.rodRefund && sess.rodRefund.signedHex &&
 			execution.rodFunding && execution.rodFunding.txid &&
-			!(execution.ltcClaim && execution.ltcClaim.txid) &&
-			!(execution.rodRefund && execution.rodRefund.txid)) {
+			!(execution.altClaim && execution.altClaim.txid && !execution.altClaim.remoteOnly) &&
+			!(execution.rodRefund && execution.rodRefund.txid && !execution.rodRefund.remoteOnly)) {
 			if (!markAutomationBusy(sess, 'refundRod')) return;
 			ENGINE.getRodHeight().then(function (rodHeight) {
 				if (rodHeight < terms.refundRodHeight) {
@@ -1631,9 +1904,15 @@ $(function () {
 					return ENGINE.broadcastTx('ROD', sess.rodRefund.signedHex).then(function (response) {
 						var live = ENGINE.restoreLive(sess.swapId) || sess;
 						live.execution = live.execution || {};
-						live.execution.rodRefund = { txid: (response && response.txid) || txidOfHex(live.rodRefund.signedHex), txhex: live.rodRefund.signedHex, broadcastAt: new Date().toISOString() };
+						var localRodRefundTxid = txidOfHex(live.rodRefund.signedHex);
+						if (response && response.txid && String(response.txid).toLowerCase() !== String(localRodRefundTxid).toLowerCase()) {
+							clearAutomationBusy(sess, 'refundRod');
+							slog(sess.swapId, '✗ ROD refund broadcast returned an unexpected txid ' + response.txid + ' (expected ' + localRodRefundTxid + ') - not recording, will retry');
+							return;
+						}
+						live.execution.rodRefund = { txid: localRodRefundTxid, txhex: live.rodRefund.signedHex, broadcastAt: new Date().toISOString() };
 						SWAP.markRefundState(live, 'ROD_REFUND_BROADCAST', 'Timelocked ROD refund broadcast at height ' + rodHeight);
-						SWAP.markRefundState(live, (execution.ltcFunding && execution.ltcFunding.txid) ? 'ROD_REFUNDED' : 'REFUNDED', 'ROD refund accepted by network');
+						SWAP.markRefundState(live, (execution.altFunding && execution.altFunding.txid) ? 'ROD_REFUNDED' : 'REFUNDED', 'ROD refund accepted by network');
 						ENGINE.saveLive(live);
 						publish(live, 'swap_rod_refund_broadcast', { txid: live.execution.rodRefund.txid });
 						if (live.state === 'REFUNDED') publish(live, 'swap_refunded', { chain: 'ROD' });
@@ -1648,41 +1927,53 @@ $(function () {
 			});
 			return;
 		}
-		if (sess.role === 'bob' && sess.ltcRefund && sess.ltcRefund.signedHex &&
-			execution.ltcFunding && execution.ltcFunding.txid &&
+		if (sess.role === 'bob' && sess.altRefund && sess.altRefund.signedHex &&
+			execution.altFunding && execution.altFunding.txid &&
 			!sess.recoveredAdaptorSecret &&
-			!(execution.ltcRefund && execution.ltcRefund.txid)) {
-			if (!markAutomationBusy(sess, 'refundLtc')) return;
-			ENGINE.getLtcHeight().then(function (ltcHeight) {
-				if (ltcHeight < terms.ltcRefundLockHeight) {
-					clearAutomationBusy(sess, 'refundLtc');
+			!(execution.altRefund && execution.altRefund.txid && !execution.altRefund.remoteOnly)) {
+			if (!markAutomationBusy(sess, 'refundAlt')) return;
+			ENGINE.getAltHeight(altChainOf(sess)).then(function (altHeight) {
+				if (altHeight < terms.altRefundLockHeight) {
+					clearAutomationBusy(sess, 'refundAlt');
 					return;
 				}
-				return ENGINE.isOutpointUnspent('LTC', terms.ltcFunding.multisigAddress, sess.plannedLtcFunding.txid, 0).then(function (status) {
+				return ENGINE.isOutpointUnspent(altChainOf(sess), terms.altFunding.multisigAddress, sess.plannedAltFunding.txid, 0).then(function (status) {
 					if (!status.unspent) {
 						/* Spent but no secret yet → Alice claimed; recovery path
 						   will pick it up via outspend polling. */
-						clearAutomationBusy(sess, 'refundLtc');
-						slog(sess.swapId, 'LTC refund skipped: funding output spent (checking for Alice claim)');
-						autoContinueSwap(ENGINE.restoreLive(sess.swapId) || sess);
+						clearAutomationBusy(sess, 'refundAlt');
+						slog(sess.swapId, altChainOf(sess) + ' refund skipped: funding output spent (checking for Alice claim)');
+						/* Re-entering autoContinueSwap on a TERMINAL session
+						   bounces straight back into checkRefunds, and the
+						   terminal branch never runs the settlement path that
+						   would clear the condition - an unbounded two-request
+						   loop with no delay. The tick re-drives it safely. */
+						var refreshedAfterSpend = ENGINE.restoreLive(sess.swapId) || sess;
+						if (!isTerminal(refreshedAfterSpend)) autoContinueSwap(refreshedAfterSpend);
 						return;
 					}
-					return ENGINE.broadcastTx('LTC', sess.ltcRefund.signedHex).then(function (response) {
+					return ENGINE.broadcastTx(altChainOf(sess), sess.altRefund.signedHex).then(function (response) {
 						var live = ENGINE.restoreLive(sess.swapId) || sess;
 						live.execution = live.execution || {};
-						live.execution.ltcRefund = { txid: (response && response.txid) || txidOfHex(live.ltcRefund.signedHex), txhex: live.ltcRefund.signedHex, broadcastAt: new Date().toISOString() };
-						SWAP.markRefundState(live, 'LTC_REFUND_BROADCAST', 'Timelocked LTC refund broadcast at height ' + ltcHeight);
-						SWAP.markRefundState(live, 'LTC_REFUNDED', 'LTC refund accepted by network');
+						var localAltRefundTxid = txidOfHex(live.altRefund.signedHex);
+						if (response && response.txid && String(response.txid).toLowerCase() !== String(localAltRefundTxid).toLowerCase()) {
+							clearAutomationBusy(sess, 'refundAlt');
+							slog(sess.swapId, '✗ ' + altChainOf(sess) + ' refund broadcast returned an unexpected txid ' + response.txid + ' (expected ' + localAltRefundTxid + ') - not recording, will retry');
+							return;
+						}
+						live.execution.altRefund = { txid: localAltRefundTxid, txhex: live.altRefund.signedHex, broadcastAt: new Date().toISOString() };
+						SWAP.markRefundState(live, 'ALT_REFUND_BROADCAST', 'Timelocked ' + altChainOf(live) + ' refund broadcast at height ' + altHeight);
+						SWAP.markRefundState(live, 'ALT_REFUNDED', altChainOf(live) + ' refund accepted by network');
 						ENGINE.saveLive(live);
-						publish(live, 'swap_ltc_refund_broadcast', { txid: live.execution.ltcRefund.txid });
-						slog(live.swapId, '✓ LTC refund broadcast ' + live.execution.ltcRefund.txid + ' — funds returned to ' + terms.buyerLtcRefundAddress);
-						clearAutomationBusy(sess, 'refundLtc');
+						publish(live, 'swap_alt_refund_broadcast', { txid: live.execution.altRefund.txid });
+						slog(live.swapId, '✓ ' + altChainOf(live) + ' refund broadcast ' + live.execution.altRefund.txid + ' — funds returned to ' + terms.buyerAltRefundAddress);
+						clearAutomationBusy(sess, 'refundAlt');
 						refreshSwaps(); showActiveSwap(live.swapId);
 					});
 				});
 			}).fail(function (error) {
-				clearAutomationBusy(sess, 'refundLtc');
-				slog(sess.swapId, 'LTC refund check failed: ' + (error && error.message || error));
+				clearAutomationBusy(sess, 'refundAlt');
+				slog(sess.swapId, '' + altChainOf(sess) + ' refund check failed: ' + (error && error.message || error));
 			});
 		}
 	}
@@ -1700,7 +1991,10 @@ $(function () {
 	   a transaction the network is guaranteed to reject. */
 	function verifyClaimSignatures(session, tx, orderedSigs) {
 		var redeemPubkeys = [session.terms.aliceChildPubKey, session.terms.bobChildPubKey];
-		var sighash = Crypto.util.hexToBytes(tx.transactionHash(0, 1));
+		/* Chain-aware: a hardcoded legacy sighash here made every BCH
+		   settlement fail its own local CHECKMULTISIG check (and would have
+		   passed a legacy-signed transaction the network rejects). */
+		var sighash = ENGINE.sighash(tx);
 		var pubkeyIndex = 0;
 		for (var i = 0; i < orderedSigs.length; i++) {
 			if (!orderedSigs[i]) return false;
@@ -1752,7 +2046,15 @@ $(function () {
 			return evidence;
 		}
 		return ENGINE.broadcastTx(chainCode, claimTxHex).then(function (response) {
-			return persistClaimEvidence((response && response.txid) || claimTxid, false);
+			/* The txid is a hash of bytes we already hold, so it is knowable
+			   locally. Taking the API's word for it let a hostile or broken
+			   explorer acknowledge a transaction it never relayed and still
+			   have us record claim evidence - which is exactly the flag that
+			   suppresses our own refund. Verify, do not adopt. */
+			if (response && response.txid && String(response.txid).toLowerCase() !== String(claimTxid).toLowerCase()) {
+				return $.Deferred().reject(new Error(chainCode + ' broadcast returned txid ' + response.txid + ' but the signed transaction hashes to ' + claimTxid)).promise();
+			}
+			return persistClaimEvidence(claimTxid, false);
 		}, function (error) {
 			var message = (error && error.message) ? error.message : String(error || '');
 			if (/already in block chain|already in blockchain|already have transaction|txn-already-known|transaction already in block chain/i.test(message)) {
@@ -1766,25 +2068,25 @@ $(function () {
 	   signature COMPLETED with the adaptor secret y. Broadcasting this is the
 	   act that reveals y to Bob (he recovers it from the completed signature
 	   in the real transaction). */
-	function claimLtcAsAlice(session) {
-		if (session.role !== 'alice') throw new Error('Only Alice claims LTC');
+	function claimAltAsAlice(session) {
+		if (session.role !== 'alice') throw new Error('Only Alice claims ' + altChainOf(session));
 		if (!session.adaptorSecret) throw new Error('Adaptor secret unavailable; reopen the wallet that created this swap');
-		if (!session.remoteLtcAdaptorSignature) throw new Error('Bob\'s LTC adaptor signature has not arrived yet');
-		var tx = claimTxFor(session, 'LTC');
-		var aliceSig = ENGINE.signClaimTx('LTC', tx, getLocalChildWif(session, 'LTC'));
-		var completedBobSig = ENGINE.completeSig(Crypto.util.hexToBytes(session.remoteLtcAdaptorSignature), session.adaptorSecret);
-		return broadcastClaim(session, 'LTC', [aliceSig, completedBobSig], 'ltcClaim', 'swap_ltc_claimed', { completedSigHex: completedBobSig });
+		if (!session.remoteAltAdaptorSignature) throw new Error('Bob\'s ' + altChainOf(session) + ' adaptor signature has not arrived yet');
+		var tx = claimTxFor(session, altChainOf(session));
+		var aliceSig = ENGINE.signClaimTx(altChainOf(session), tx, getLocalChildWif(session, altChainOf(session)));
+		var completedBobSig = ENGINE.completeSig(Crypto.util.hexToBytes(session.remoteAltAdaptorSignature), session.adaptorSecret, tx.sigHashType());
+		return broadcastClaim(session, altChainOf(session), [aliceSig, completedBobSig], 'altClaim', 'swap_alt_claimed', { completedSigHex: completedBobSig });
 	}
 
 	/* Bob's ROD claim: Alice's adaptor signature completed with the RECOVERED
 	   secret + his own fresh normal signature. */
 	function claimRodAsBob(session) {
 		if (session.role !== 'bob') throw new Error('Only Bob claims ROD');
-		if (!session.recoveredAdaptorSecret) throw new Error('Adaptor secret has not been recovered from the LTC claim yet');
+		if (!session.recoveredAdaptorSecret) throw new Error('Adaptor secret has not been recovered from the ' + altChainOf(session) + ' claim yet');
 		if (!session.remoteRodAdaptorSignature) throw new Error('Alice\'s ROD adaptor signature has not arrived yet');
 		var tx = claimTxFor(session, 'ROD');
 		var bobSig = ENGINE.signClaimTx('ROD', tx, getLocalChildWif(session, 'ROD'));
-		var completedAliceSig = ENGINE.completeSig(Crypto.util.hexToBytes(session.remoteRodAdaptorSignature), session.recoveredAdaptorSecret);
+		var completedAliceSig = ENGINE.completeSig(Crypto.util.hexToBytes(session.remoteRodAdaptorSignature), session.recoveredAdaptorSecret, tx.sigHashType());
 		return broadcastClaim(session, 'ROD', [completedAliceSig, bobSig], 'rodClaim', 'swap_rod_claimed', { completedSigHex: completedAliceSig });
 	}
 
@@ -1806,16 +2108,16 @@ $(function () {
 				$button.prop('disabled', false);
 				return;
 			}
-			if (action === 'claim-ltc') {
-				if (session.role !== 'alice') throw new Error('Only Alice claims LTC first');
-				slog(session.swapId, '→ Claim LTC requested by seller');
-				claimLtcAsAlice(session).then(function (evidence) {
+			if (action === 'claim-alt') {
+				if (session.role !== 'alice') throw new Error('Only Alice claims ' + altChainOf(session) + ' first');
+				slog(session.swapId, '→ Claim ' + altChainOf(session) + ' requested by seller');
+				claimAltAsAlice(session).then(function (evidence) {
 					var liveSession = ENGINE.restoreLive(session.swapId) || session;
-					SWAP.safeAdvance(liveSession, 'LTC_CLAIMED', 'LTC claimed');
+					SWAP.safeAdvance(liveSession, 'ALT_CLAIMED', '' + altChainOf(liveSession) + ' claimed');
 					ENGINE.saveLive(liveSession);
 					showActiveSwap(liveSession.swapId);
 					refreshSwaps();
-					slog(liveSession.swapId, '→ LTC claimed ' + evidence.txid);
+					slog(liveSession.swapId, '→ ' + altChainOf(liveSession) + ' claimed ' + evidence.txid);
 				}).fail(function (error) { flash('warning', error.message || error); }).always(function () { $button.prop('disabled', false); });
 				return;
 			}
@@ -1845,7 +2147,7 @@ $(function () {
 			if (action === 'refresh') {
 				var tasks = [];
 				if (session.execution && session.execution.rodFunding && session.execution.rodFunding.txid) tasks.push(verifyFunding(session, 'ROD'));
-				if (session.execution && session.execution.ltcFunding && session.execution.ltcFunding.txid) tasks.push(verifyFunding(session, 'LTC'));
+				if (session.execution && session.execution.altFunding && session.execution.altFunding.txid) tasks.push(verifyFunding(session, altChainOf(session)));
 				$.when.apply($, tasks).always(function () { var liveSession = ENGINE.restoreLive(session.swapId) || session; slog(session.swapId, '↻ Refreshed funding confirmations'); autoContinueSwap(liveSession); showActiveSwap(session.swapId); $button.prop('disabled', false); });
 				return;
 			}
@@ -1893,10 +2195,10 @@ $(function () {
 		var role = $('#nsRole').val();
 		var myAddr = walletId.address;
 		var rodAmount = $.trim($('#nsRod').val());
-		var ltcAmount = $.trim($('#nsLtc').val());
+		var altAmount = $.trim($('#nsAlt').val());
 		var releaseRodHeight = parseInt($('#nsRelease').val(), 10);
 		if (!rodAmount || parseFloat(rodAmount) <= 0) throw new Error('Enter a positive ROD amount');
-		if (!ltcAmount || parseFloat(ltcAmount) <= 0) throw new Error('Enter a positive LTC amount');
+		if (!altAmount || parseFloat(altAmount) <= 0) throw new Error('Enter a positive ' + selectedAltChain() + ' amount');
 		if (!releaseRodHeight) throw new Error('Set release ROD height');
 		var orderId = myAddr + '/otc-order-' + Date.now();
 		/* Compact single-line JSON is safer for name_update size limits */
@@ -1906,12 +2208,13 @@ $(function () {
 			side: role === 'alice' ? 'sell' : 'buy',
 			seller: role === 'alice' ? myAddr : '',
 			buyer: role === 'bob' ? myAddr : '',
-			pair: 'ROD/LTC',
+			altChain: selectedAltChain(),
+			pair: 'ROD/' + selectedAltChain(),
 			give: rodAmount,
-			want: ltcAmount,
+			want: altAmount,
 			sellerSwapXpub: role === 'alice' ? swapAcct.xpub : '',
 			buyerSwapXpub: role === 'bob' ? swapAcct.xpub : '',
-			sellerLtcPayoutAddress: role === 'alice' ? getWalletAddressForChain(walletId.wif, 'LTC') : '',
+			sellerAltPayoutAddress: role === 'alice' ? getWalletAddressForChain(walletId.wif, selectedAltChain()) : '',
 			buyerRodPayoutAddress: role === 'bob' ? getWalletAddressForChain(walletId.wif, 'ROD') : '',
 			releaseRodHeight: releaseRodHeight,
 			orderId: orderId
@@ -2005,26 +2308,38 @@ $(function () {
 			/* Dust-limit validation: both the funding output AND the claim
 			   output (funding minus fee) must exceed the network dust
 			   threshold — otherwise the tx will be rejected by nodes. */
-			var DUST_LIMIT = 546; /* satoshis — applies to both ROD and LTC P2SH outputs */
+			var altChainCode = selectedAltChain();
+			/* Dust is per-chain, and on Dogecoin it is an ABSOLUTE amount
+			   (0.001 DOGE hard limit) rather than something derived from a fee
+			   rate — so it cannot be paid away by bidding the fee higher. */
+			/* Gate on the ECONOMICAL minimum, not the hard dust limit. On
+			   Dogecoin an output between the two (0.001–0.01 DOGE) is legal but
+			   adds a flat 0.01 DOGE surcharge to the relay minimum — which
+			   exceeds the canonical settlement fee already fixed in the terms,
+			   so the claim and refund transactions could never be signed and the
+			   swap would stall permanently after passing this check. */
+			var rodDust = CHAINS.minEconomicalOutputSats('ROD');
+			var altDust = CHAINS.minEconomicalOutputSats(altChainCode);
 			var rodSats = CHAINS.decimalToSats($('#nsRod').val());
-			var ltcSats = CHAINS.decimalToSats($('#nsLtc').val());
-			var rodClaimFeeSats = CHAINS.decimalToSats(claimFee('ROD'));
-			var ltcClaimFeeSats = CHAINS.decimalToSats(claimFee('LTC'));
-			if (rodSats < DUST_LIMIT) throw new Error('ROD amount (' + rodSats + ' sats) is below dust limit (' + DUST_LIMIT + ' sats). Minimum: ' + CHAINS.satsToDecimal(DUST_LIMIT) + ' ROD');
-			if (ltcSats < DUST_LIMIT) throw new Error('LTC amount (' + ltcSats + ' sats) is below dust limit (' + DUST_LIMIT + ' sats). Minimum: ' + CHAINS.satsToDecimal(DUST_LIMIT) + ' LTC');
-			if (rodSats - rodClaimFeeSats < DUST_LIMIT) throw new Error('ROD claim output (' + (rodSats - rodClaimFeeSats) + ' sats) would be dust after fee. Increase ROD amount.');
-			if (ltcSats - ltcClaimFeeSats < DUST_LIMIT) throw new Error('LTC claim output (' + (ltcSats - ltcClaimFeeSats) + ' sats) would be dust after fee. Increase LTC amount.');
+			var altSats = CHAINS.decimalToSats($('#nsAlt').val());
+			var rodClaimFeeSats = CHAINS.decimalToSats(claimFee(null, 'ROD'));
+			var altClaimFeeSats = CHAINS.decimalToSats(claimFee(null, altChainCode));
+			if (rodSats < rodDust) throw new Error('ROD amount (' + rodSats + ' sats) is below the dust limit (' + rodDust + ' sats). Minimum: ' + CHAINS.satsToDecimal(rodDust) + ' ROD');
+			if (altSats < altDust) throw new Error(altChainCode + ' amount (' + altSats + ' base units) is below the dust limit (' + altDust + '). Minimum: ' + CHAINS.satsToDecimal(altDust) + ' ' + altChainCode);
+			if (rodSats - rodClaimFeeSats < rodDust) throw new Error('ROD claim output (' + (rodSats - rodClaimFeeSats) + ' sats) would be dust after fee. Increase the ROD amount.');
+			if (altSats - altClaimFeeSats < altDust) throw new Error(altChainCode + ' claim output (' + (altSats - altClaimFeeSats) + ') would be dust after fee. Increase the ' + altChainCode + ' amount.');
 
 			$btn.prop('disabled', true);
 			flash('info', 'Checking wallet balance…');
 
 			$.when(
-				ensureWalletFundsForRole(role, $('#nsRod').val(), $('#nsLtc').val()),
+				ensureWalletFundsForRole(role, $('#nsRod').val(), $('#nsAlt').val(), altChainCode),
 				ENGINE.getRodHeight(),
-				ENGINE.getLtcHeight()
-			).then(function (balanceProof, rodHeight, ltcHeight) {
+				ENGINE.getAltHeight(altChainCode)
+			).then(function (balanceProof, rodHeight, altHeight) {
 				try {
 				var cfgNow = ENGINE.loadConfig();
+				var altChainCfg = ENGINE.altChainConfig(altChainCode, cfgNow);
 				var myAddr = walletId.address;
 				var orderId = (role === 'alice' ? myAddr : peer) + '/otc-' + Date.now();
 				var sellerIdentity = role === 'alice' ? myAddr : peer;
@@ -2032,13 +2347,15 @@ $(function () {
 				var termsNonce = randomOrderNameSuffix() + randomOrderNameSuffix();
 				var swapId = SWAP.swapIdFromOrder(orderId, '1', sellerIdentity, buyerIdentity, termsNonce);
 				var localRodAddress = getWalletAddressForChain(walletId.wif, 'ROD');
-				var localLtcAddress = getWalletAddressForChain(walletId.wif, 'LTC');
-				var sellerLtcPayoutAddress = role === 'alice' ? localLtcAddress : peerPayoutAddress;
+				var localAltAddress = getWalletAddressForChain(walletId.wif, altChainCode);
+				var sellerAltPayoutAddress = role === 'alice' ? localAltAddress : peerPayoutAddress;
 				var buyerRodPayoutAddress = role === 'bob' ? localRodAddress : peerPayoutAddress;
 				/* Refund locks: Alice (secret holder) refunds LATE on ROD, Bob
-				   refunds EARLY on LTC — enforced by native locktimes. */
+				   refunds EARLY on the alt chain — enforced by native
+				   nLockTime. The alt block count is per chain so the window is
+				   the same wall-clock duration on every chain. */
 				var refundRodHeight = parseInt(rodHeight, 10) + (parseInt(cfgNow.refundRodBlocks, 10) || 480);
-				var ltcRefundLockHeight = parseInt(ltcHeight, 10) + (parseInt(cfgNow.ltcRefundBlocks, 10) || 24);
+				var altRefundLockHeight = parseInt(altHeight, 10) + (parseInt(altChainCfg.refundBlocks, 10) || 24);
 				var releaseRodHeight = parseInt($('#nsRelease').val(), 10);
 				if (releaseRodHeight >= refundRodHeight) {
 					throw new Error('Release height ' + releaseRodHeight + ' must be below the ROD refund height ' + refundRodHeight);
@@ -2046,19 +2363,20 @@ $(function () {
 
 				var session = SWAP.createOfferSession({
 					role: role, swapId: swapId, orderId: orderId,
-					rodAmount: $('#nsRod').val(), ltcAmount: $('#nsLtc').val(),
+					altChain: altChainCode,
+					rodAmount: $('#nsRod').val(), altAmount: $('#nsAlt').val(),
 					releaseRodHeight: $('#nsRelease').val(),
 					sellerSwapAccountKey: role === 'alice' ? swapAcct.xprv : peerXpub,
 					buyerSwapAccountKey: role === 'alice' ? peerXpub : swapAcct.xprv,
-					sellerLtcPayoutAddress: sellerLtcPayoutAddress,
+					sellerAltPayoutAddress: sellerAltPayoutAddress,
 					buyerRodPayoutAddress: buyerRodPayoutAddress,
 					sellerIdentity: sellerIdentity,
 					buyerIdentity: buyerIdentity,
 					termsNonce: termsNonce,
 					refundRodHeight: refundRodHeight,
-					ltcRefundLockHeight: ltcRefundLockHeight,
+					altRefundLockHeight: altRefundLockHeight,
 					rodConfirmations: parseInt(cfgNow.rodConfirmations, 10) || 1,
-					ltcConfirmations: parseInt(cfgNow.ltcConfirmations, 10) || 1
+					altConfirmations: parseInt(altChainCfg.confirmations, 10) || 1
 				});
 
 				session.readiness = session.readiness || {};
@@ -2089,9 +2407,9 @@ $(function () {
 				$('#nsOffer').val(JSON.stringify({
 					version: 1, type: 'otc-order', seller: role === 'alice' ? myAddr : peer,
 					buyer: role === 'bob' ? myAddr : peer,
-					pair: 'ROD/LTC', give: session.terms.rodAmount, want: session.terms.ltcAmount,
+					pair: pairLabel(session), altChain: altChainOf(session), give: session.terms.rodAmount, want: session.terms.altAmount,
 					sellerSwapXpub: session.sellerSwapXpub, buyerSwapXpub: session.buyerSwapXpub,
-					sellerLtcPayoutAddress: session.terms.sellerLtcPayoutAddress,
+					sellerAltPayoutAddress: session.terms.sellerAltPayoutAddress,
 					buyerRodPayoutAddress: session.terms.buyerRodPayoutAddress,
 					releaseRodHeight: session.terms.releaseRodHeight,
 					termsHash: session.terms.termsHash
@@ -2160,46 +2478,138 @@ $(function () {
 			if (!(parseInt(terms.refundRodHeight, 10) > parseInt(terms.releaseRodHeight, 10))) {
 				throw new Error('Incoming terms rejected: refundRodHeight must be above releaseRodHeight');
 			}
-			if (!(parseInt(terms.ltcRefundLockHeight, 10) > 0)) {
-				throw new Error('Incoming terms rejected: missing LTC refund lock height');
+			if (!(parseInt(terms.altRefundLockHeight, 10) > 0)) {
+				throw new Error('Incoming terms rejected: missing alt-chain refund lock height');
 			}
+			/* Reject an unknown alt chain up front. Without this the rebuild
+			   below would silently fall back to the default chain, and the peer
+			   would only see an opaque terms-hash mismatch. The hash check that
+			   follows is what actually BINDS the chain: terms are rebuilt
+			   locally from terms.altChain, so a peer cannot announce one chain
+			   and get signatures for another. */
+			var incomingAltChain = terms.altChain || SWAP.DEFAULT_ALT_CHAIN;
+			if (incomingAltChain === 'ROD' || !CHAINS.definitions[incomingAltChain]) {
+				throw new Error('Incoming terms rejected: unsupported alt chain ' + incomingAltChain);
+			}
+			/* Settlement fees ride in the terms and go straight into the
+			   transactions both sides sign. The terms hash cannot catch a low
+			   fee - the local rebuild uses the SAME peer-supplied number, so
+			   the hash matches by construction - and ROD's relayFloorPerByte
+			   of 0 means assertSettlementPolicy accepts a 1-sat fee. A peer
+			   proposing an under-floor refund fee hands you a refund that
+			   never relays while their own leg matures normally. */
+			(function assertIncomingFeeFloors() {
+				var altCanonical = SWAP.altFees(incomingAltChain);
+				var floors = [
+					['rodClaimFee', SWAP.DEFAULT_FEES.rodClaimFee],
+					['rodRefundFee', SWAP.DEFAULT_FEES.rodRefundFee],
+					['altClaimFee', altCanonical.claimFee],
+					['altRefundFee', altCanonical.refundFee]
+				];
+				for (var fi = 0; fi < floors.length; fi++) {
+					var field = floors[fi][0], minimum = floors[fi][1];
+					if (terms[field] == null || terms[field] === '') continue;
+					if (CHAINS.decimalToSats(String(terms[field])) < CHAINS.decimalToSats(String(minimum))) {
+						throw new Error('Incoming terms rejected: ' + field + ' ' + terms[field] + ' is below the canonical minimum ' + minimum);
+					}
+				}
+			})();
+			/* Refund safety is a WALL-CLOCK relationship. refundRodHeight is
+			   peer-supplied, so a counterparty can propose a ROD refund that
+			   matures almost immediately while your alt refund is still an
+			   hour out; they then refund ROD and claim the alt leg with the
+			   adaptor secret, taking both. Require a real margin in seconds
+			   against this client's own expectation for the alt chain. */
+			/* refundRodHeight is peer-supplied and is NOT constrained by the
+			   terms hash (the local rebuild reuses the same number, so the
+			   hash matches by construction). A counterparty proposing a ROD
+			   refund that matures almost immediately can refund the ROD leg
+			   and still claim the alt leg with the adaptor secret, taking
+			   both. The meaningful comparison is against the CHAIN TIP - the
+			   maker's releaseRodHeight is an absolute order height that may
+			   legitimately sit far in the future, so measuring from it
+			   rejected honest offers. Runs async and declines the session
+			   rather than blocking creation. */
+			(function assertIncomingRefundWindow() {
+				var configured = (ENGINE.loadConfig() || {}).refundRodBlocks || (ENGINE.defaults && ENGINE.defaults.refundRodBlocks) || 480;
+				var proposedHeight = parseInt(terms.refundRodHeight, 10);
+				ENGINE.getRodHeight().then(function (rodTip) {
+					var window = proposedHeight - rodTip;
+					if (window >= Math.floor(configured / 2)) return;
+					var live = ENGINE.restoreLive(env.swapId);
+					if (!live || live.declined) return;
+					live.declined = true;
+					live.declinedAt = new Date().toISOString();
+					ENGINE.saveLive(live);
+					slog(env.swapId, '\u2717 Terms declined: ROD refund matures in ' + window + ' blocks, far below this client\'s configured ' + configured);
+					refreshSwaps();
+				}, function () {});
+			})();
 			var session = SWAP.createOfferSession({
 				role: role,
 				swapId: env.swapId,
 				orderId: terms.orderId,
+				altChain: incomingAltChain,
 				rodAmount: terms.rodAmount,
-				ltcAmount: terms.ltcAmount,
+				altAmount: terms.altAmount,
 				releaseRodHeight: terms.releaseRodHeight,
 				sellerSwapAccountKey: role === 'alice' ? swapAcct.xprv : terms.sellerSwapXpub,
 				buyerSwapAccountKey: role === 'bob' ? swapAcct.xprv : terms.buyerSwapXpub,
-				sellerLtcPayoutAddress: terms.sellerLtcPayoutAddress,
+				sellerAltPayoutAddress: terms.sellerAltPayoutAddress,
 				buyerRodPayoutAddress: terms.buyerRodPayoutAddress,
 				sellerIdentity: terms.sellerIdentity,
 				buyerIdentity: terms.buyerIdentity,
 				termsNonce: terms.termsNonce,
 				refundRodHeight: terms.refundRodHeight,
-				ltcRefundLockHeight: terms.ltcRefundLockHeight,
+				altRefundLockHeight: terms.altRefundLockHeight,
 				rodConfirmations: terms.rodConfirmations,
-				ltcConfirmations: terms.ltcConfirmations,
+				altConfirmations: terms.altConfirmations,
 				rodClaimFee: terms.rodClaimFee,
-				ltcClaimFee: terms.ltcClaimFee,
+				altClaimFee: terms.altClaimFee,
 				rodRefundFee: terms.rodRefundFee,
-				ltcRefundFee: terms.ltcRefundFee
+				altRefundFee: terms.altRefundFee
 			});
+			/* A terms-hash mismatch is FATAL. The old fallback accepted the
+			   counterparty's terms object verbatim whenever the local child
+			   pubkey matched - but that pubkey derives only from swapId plus
+			   the victim's own xprv, so it is not evidence about ANY economic
+			   field. A peer could therefore mismatch deliberately and install
+			   its own funding/claim addresses, and every later local check
+			   would pass because they all read the same substituted terms. */
+			/* A terms-hash mismatch is fatal UNLESS the only differing fields
+			   are the extended-public-key strings. Converting an xprv to an
+			   xpub locally is not byte-stable against the peer's published
+			   xpub (depth/parent-fingerprint metadata differs) even though both
+			   derive the identical child keys - which is why a fallback exists
+			   here at all.
+
+			   The old fallback accepted the counterparty's whole terms object
+			   whenever the local child pubkey matched. That pubkey derives only
+			   from swapId plus this wallet's own xprv, so it is evidence about
+			   nothing economic: a peer could mismatch deliberately and install
+			   its own funding and claim addresses, and every later local check
+			   would pass because they all read the substituted terms. Diff the
+			   two objects instead and refuse anything outside the whitelist. */
 			if (!session.terms || session.terms.termsHash !== terms.termsHash) {
 				var expectedLocalPubkey = role === 'alice' ? terms.aliceChildPubKey : terms.bobChildPubKey;
-				var localPubkeyMatches = !!(expectedLocalPubkey && session.localChildPublicKey === expectedLocalPubkey);
-				log('Incoming terms hash mismatch ' + short(env.swapId) + ': local ' + short(session.terms && session.terms.termsHash || '') + ' remote ' + short(terms.termsHash || '') + ' localPubkeyMatches=' + localPubkeyMatches);
-				if (!localPubkeyMatches) {
+				if (!(expectedLocalPubkey && session.localChildPublicKey === expectedLocalPubkey)) {
 					ENGINE.removeLive(env.swapId);
-					log('Incoming terms local key mismatch ' + short(env.swapId) + ': role ' + role + ' local child ' + short(session.localChildPublicKey || '') + ' expected ' + short(expectedLocalPubkey || ''));
 					throw new Error('Incoming swap terms do not match locally derived terms hash');
+				}
+				var XPUB_RESERIALISATION_ONLY = { sellerSwapXpub: 1, buyerSwapXpub: 1, termsHash: 1 };
+				var differing = canonicalTermsDiff(session.terms, terms).filter(function (field) {
+					return !XPUB_RESERIALISATION_ONLY[field];
+				});
+				if (differing.length) {
+					ENGINE.removeLive(env.swapId);
+					log('Incoming terms hash mismatch ' + short(env.swapId) + ' in non-whitelisted fields: ' + differing.join(', '));
+					throw new Error('Incoming swap terms differ from locally derived terms in: ' + differing.join(', '));
 				}
 				session.terms = $.extend(true, {}, terms);
 				session.sellerSwapXpub = terms.sellerSwapXpub;
 				session.buyerSwapXpub = terms.buyerSwapXpub;
 				session.childIndex = terms.childIndex;
-				log('Accepted incoming remote terms after local key match ' + short(env.swapId));
+				log('Accepted incoming terms ' + short(env.swapId) + ': differs only in xpub re-serialisation');
 			}
 			if (eventObject) {
 				ensureRemotePeer(session, eventObject);
@@ -2225,10 +2635,10 @@ $(function () {
 			}
 			$('#otcTrackSwapStatus').html('Added <code>' + esc(short(env.swapId)) + '</code> from incoming terms.');
 			slog(env.swapId, '← Created incoming ' + (role === 'alice' ? 'seller' : 'buyer') + ' session from terms');
-			ensureWalletFundsForRole(role, terms.rodAmount, terms.ltcAmount).then(function (balanceProof) {
+			ensureWalletFundsForRole(role, terms.rodAmount, terms.altAmount, altChainOf(terms)).then(function (balanceProof) {
 				saveLocalReadiness(session, buildReadinessEvidence(balanceProof), '→ Sent local readiness proof');
 			}, function (error) {
-				var fallbackReadiness = buildLocalReadinessUnchecked(role, terms.rodAmount, terms.ltcAmount, 'Balance check blocked: ' + error);
+				var fallbackReadiness = buildLocalReadinessUnchecked(role, terms.rodAmount, terms.altAmount, 'Balance check blocked: ' + error, altChainOf(terms));
 				saveLocalReadiness(session, fallbackReadiness, '⚠ Sent unverified local readiness after balance check failed: ' + error);
 				flash('warning', 'Readiness sent without balance verification: ' + error);
 			});
@@ -2253,9 +2663,24 @@ $(function () {
 		var p = env.payload || {};
 
 		if (env.type === 'swap_adaptor_point' && p.adaptorPoint) {
-			sess.adaptorPoint = p.adaptorPoint;
-			slog(env.swapId, '← Adaptor point received');
-			ENGINE.saveLive(sess);
+			/* This slot decides who can decrypt every adaptor signature in the
+			   swap. It used to be settable by ANY sender at ANY time with no
+			   peer check and no already-set guard: an attacker who replaced
+			   Alice's own point made her pre-sign her ROD claim to a point she
+			   has no secret for, and could then complete it and take the ROD
+			   leg without ever funding the alt leg. Authenticate the sender,
+			   never overwrite, and never accept a point when this client is
+			   the party that generates the secret. */
+			try { ensureRemotePeer(sess, eventObject); } catch (adaptorPeerError) { slog(env.swapId, adaptorPeerError.message || adaptorPeerError); return; }
+			if (sess.adaptorSecret) {
+				slog(env.swapId, '✗ Adaptor point from peer ignored: this client owns the adaptor secret');
+			} else if (sess.adaptorPoint && sess.adaptorPoint !== p.adaptorPoint) {
+				slog(env.swapId, '✗ Adaptor point rewrite rejected: point already pinned for this swap');
+			} else if (!sess.adaptorPoint) {
+				sess.adaptorPoint = p.adaptorPoint;
+				slog(env.swapId, '← Adaptor point received');
+				ENGINE.saveLive(sess);
+			}
 		}
 		if (env.type === 'swap_ready' && p.readiness) {
 			try { ensureRemotePeer(sess, eventObject); } catch (peerError0) { slog(env.swapId, peerError0.message || peerError0); return; }
@@ -2294,11 +2719,11 @@ $(function () {
 				autoContinueSwap(sess);
 			}
 		}
-		if (env.type === 'swap_ltc_funding_planned' && p.txid && !isLocalEcho(sess, eventObject)) {
+		if (env.type === 'swap_alt_funding_planned' && p.txid && !isLocalEcho(sess, eventObject)) {
 			try { ensureRemotePeer(sess, eventObject); } catch (peerErrorP2) { slog(env.swapId, peerErrorP2.message || peerErrorP2); return; }
-			if (sess.role === 'alice' && !(sess.plannedLtcFunding && sess.plannedLtcFunding.txid)) {
-				sess.plannedLtcFunding = { txid: p.txid, vout: p.vout || 0, value: p.value, amount: p.amount };
-				slog(env.swapId, '← Bob planned LTC funding ' + short(p.txid) + ' (not yet broadcast)');
+			if (sess.role === 'alice' && !(sess.plannedAltFunding && sess.plannedAltFunding.txid)) {
+				sess.plannedAltFunding = { txid: p.txid, vout: p.vout || 0, value: p.value, amount: p.amount };
+				slog(env.swapId, '← Bob planned ' + altChainOf(sess) + ' funding ' + short(p.txid) + ' (not yet broadcast)');
 				ENGINE.saveLive(sess);
 				autoContinueSwap(sess);
 			}
@@ -2324,22 +2749,22 @@ $(function () {
 				autoContinueSwap(sess);
 			}
 		}
-		if (env.type === 'swap_ltc_refund_signature' && p.signature && !isLocalEcho(sess, eventObject)) {
+		if (env.type === 'swap_alt_refund_signature' && p.signature && !isLocalEcho(sess, eventObject)) {
 			try { ensureRemotePeer(sess, eventObject); } catch (peerErrorR2) { slog(env.swapId, peerErrorR2.message || peerErrorR2); return; }
-			if (sess.role === 'alice' && p.from === 'bob' && !sess.ltcRefundCosigned) {
-				sess._pendingLtcRefundSig = p.signature;
+			if (sess.role === 'alice' && p.from === 'bob' && !sess.altRefundCosigned) {
+				sess._pendingAltRefundSig = p.signature;
 				ENGINE.saveLive(sess);
 				autoContinueSwap(sess);
 			}
-			if (sess.role === 'bob' && p.from === 'alice' && sess.ltcRefund && sess.ltcRefund.localSig && !sess.ltcRefund.signedHex) {
-				sess._pendingLtcRefundCosig = p.signature;
+			if (sess.role === 'bob' && p.from === 'alice' && sess.altRefund && sess.altRefund.localSig && !sess.altRefund.signedHex) {
+				sess._pendingAltRefundCosig = p.signature;
 				ENGINE.saveLive(sess);
 				autoContinueSwap(sess);
 			}
 		}
-		if (env.type === 'swap_ltc_adaptor_signature' && p.hex && !isLocalEcho(sess, eventObject)) {
-			if (sess.role === 'alice' && !sess.remoteLtcAdaptorSignature) {
-				sess._pendingLtcAdaptorSig = p.hex;
+		if (env.type === 'swap_alt_adaptor_signature' && p.hex && !isLocalEcho(sess, eventObject)) {
+			if (sess.role === 'alice' && !sess.remoteAltAdaptorSignature) {
+				sess._pendingAltAdaptorSig = p.hex;
 				ENGINE.saveLive(sess);
 				autoContinueSwap(sess);
 			}
@@ -2375,67 +2800,94 @@ $(function () {
 				autoContinueSwap(sess);
 			}
 		}
-		if (env.type === 'swap_ltc_funded' && p.funding) {
+		if (env.type === 'swap_alt_funded' && p.funding) {
 			try { ensureRemotePeer(sess, eventObject); } catch (peerError4) { slog(env.swapId, peerError4.message || peerError4); return; }
-			if (sess.plannedLtcFunding && p.funding.txid && p.funding.txid !== sess.plannedLtcFunding.txid) {
-				slog(env.swapId, '✗ LTC funding evidence txid does not match planned funding — ignored');
+			if (sess.plannedAltFunding && p.funding.txid && p.funding.txid !== sess.plannedAltFunding.txid) {
+				slog(env.swapId, '✗ ' + altChainOf(sess) + ' funding evidence txid does not match planned funding — ignored');
 			} else {
-				var ltcEvidence = $.extend({}, p.funding); delete ltcEvidence.verifiedLocally;
+				var altEvidence = $.extend({}, p.funding); delete altEvidence.verifiedLocally;
 				sess.execution = sess.execution || {};
-				sess.execution.ltcFunding = $.extend({}, sess.execution.ltcFunding || {}, ltcEvidence);
-				try { SWAP.safeAdvance(sess, 'BOB_LTC_FUNDED', 'Remote LTC funding evidence'); } catch (e2) {}
-				slog(env.swapId, '← LTC funding evidence'); ENGINE.saveLive(sess);
+				sess.execution.altFunding = $.extend({}, sess.execution.altFunding || {}, altEvidence);
+				try { SWAP.safeAdvance(sess, 'BOB_ALT_FUNDED', 'Remote ' + altChainOf(sess) + ' funding evidence'); } catch (e2) {}
+				slog(env.swapId, '← ' + altChainOf(sess) + ' funding evidence'); ENGINE.saveLive(sess);
 				autoContinueSwap(sess);
 			}
 		}
-		if (env.type === 'swap_ltc_claimed' && !isLocalEcho(sess, eventObject)) {
+		if (env.type === 'swap_alt_claimed' && !isLocalEcho(sess, eventObject)) {
+			try { ensureRemotePeer(sess, eventObject); } catch (peerError5) { slog(env.swapId, peerError5.message || peerError5); return; }
 			sess.execution = sess.execution || {};
-			sess.execution.ltcClaim = $.extend({}, sess.execution.ltcClaim || {}, p);
-			try { SWAP.safeAdvance(sess, 'LTC_CLAIMED', 'Remote LTC claim evidence'); } catch (e3) {}
-			slog(env.swapId, '← LTC claimed evidence'); ENGINE.saveLive(sess);
+			/* remoteOnly: a peer SAYING it claimed is a hint to poll, never
+			   proof. checkRefunds must not treat it as a reason to withhold a
+			   refund, and the secret-recovery path must not treat the attached
+			   hex as the real claim - both are wedges that let a counterparty
+			   disarm the honest side and then take both legs. */
+			/* Never downgrade locally verified evidence to remoteOnly: doing so
+			   un-suppressed Alice's own ROD refund after she had already
+			   claimed the alt coin, breaking the "an honest Alice never
+			   refunds after claiming" invariant. */
+			if (!(sess.execution.altClaim && !sess.execution.altClaim.remoteOnly)) {
+				sess.execution.altClaim = $.extend({}, sess.execution.altClaim || {}, p, { remoteOnly: true });
+			}
+			try { SWAP.safeAdvance(sess, 'ALT_CLAIMED', 'Remote ' + altChainOf(sess) + ' claim evidence'); } catch (e3) {}
+			slog(env.swapId, '← ' + altChainOf(sess) + ' claimed evidence'); ENGINE.saveLive(sess);
 			if (sess.role === 'bob') {
 				if (tryRecoverFromEvidence(sess)) autoContinueSwap(ENGINE.restoreLive(sess.swapId) || sess);
 				else autoContinueSwap(sess);
 			}
 		}
 		if (env.type === 'swap_rod_refund_broadcast' && !isLocalEcho(sess, eventObject)) {
+			try { ensureRemotePeer(sess, eventObject); } catch (peerError6) { slog(env.swapId, peerError6.message || peerError6); return; }
 			sess.execution = sess.execution || {};
-			sess.execution.rodRefund = $.extend({}, sess.execution.rodRefund || {}, { txid: p.txid || '' });
+			sess.execution.rodRefund = $.extend({}, sess.execution.rodRefund || {}, { txid: p.txid || '', remoteOnly: true });
 			try {
-				var ltcClaimedByAlice = !!(sess.execution.ltcClaim && sess.execution.ltcClaim.txid);
-				SWAP.markRefundState(sess, ltcClaimedByAlice ? 'PARTIALLY_SETTLED' : (sess.state === 'LTC_REFUNDED' ? 'REFUNDED' : 'ROD_REFUNDED'), 'Counterparty broadcast ROD refund');
+				var altClaimedByAlice = !!(sess.execution.altClaim && sess.execution.altClaim.txid);
+				SWAP.markRefundState(sess, altClaimedByAlice ? 'PARTIALLY_SETTLED' : (sess.state === 'ALT_REFUNDED' ? 'REFUNDED' : 'ROD_REFUNDED'), 'Counterparty broadcast ROD refund');
 			} catch (refundStateError1) {}
 			slog(env.swapId, '← ROD refund broadcast by counterparty'); ENGINE.saveLive(sess);
 			refreshSwaps();
 		}
-		if (env.type === 'swap_ltc_refund_broadcast' && !isLocalEcho(sess, eventObject)) {
+		if (env.type === 'swap_alt_refund_broadcast' && !isLocalEcho(sess, eventObject)) {
+			try { ensureRemotePeer(sess, eventObject); } catch (peerError7) { slog(env.swapId, peerError7.message || peerError7); return; }
 			sess.execution = sess.execution || {};
-			sess.execution.ltcRefund = $.extend({}, sess.execution.ltcRefund || {}, { txid: p.txid || '' });
+			sess.execution.altRefund = $.extend({}, sess.execution.altRefund || {}, { txid: p.txid || '', remoteOnly: true });
 			try {
-				SWAP.markRefundState(sess, (sess.state === 'ROD_REFUNDED' || sess.state === 'REFUNDED') ? 'REFUNDED' : 'LTC_REFUNDED', 'Counterparty broadcast LTC refund');
+				SWAP.markRefundState(sess, (sess.state === 'ROD_REFUNDED' || sess.state === 'REFUNDED') ? 'REFUNDED' : 'ALT_REFUNDED', 'Counterparty broadcast ' + altChainOf(sess) + ' refund');
 			} catch (refundStateError2) {}
-			slog(env.swapId, '← LTC refund broadcast by counterparty'); ENGINE.saveLive(sess);
+			slog(env.swapId, '← ' + altChainOf(sess) + ' refund broadcast by counterparty'); ENGINE.saveLive(sess);
 			refreshSwaps();
 		}
 		if (env.type === 'swap_refunded' && !isLocalEcho(sess, eventObject)) {
+			try { ensureRemotePeer(sess, eventObject); } catch (peerError8) { slog(env.swapId, peerError8.message || peerError8); return; }
 			try { SWAP.markRefundState(sess, 'REFUNDED', 'Counterparty reported swap refunded'); } catch (refundStateError3) {}
 			slog(env.swapId, '← Swap refunded'); ENGINE.saveLive(sess);
 			refreshSwaps();
 		}
 		if (env.type === 'swap_secret_recovered' && !isLocalEcho(sess, eventObject)) {
+			try { ensureRemotePeer(sess, eventObject); } catch (peerError9) { slog(env.swapId, peerError9.message || peerError9); return; }
 			try { SWAP.safeAdvance(sess, 'SECRET_RECOVERED', 'Remote secret recovery evidence'); } catch (e4) {}
 			slog(env.swapId, '← Secret recovery evidence'); ENGINE.saveLive(sess);
 		}
 		if (env.type === 'swap_rod_claimed' && !isLocalEcho(sess, eventObject)) {
-			sess.execution = sess.execution || {}; sess.execution.rodClaim = p;
+			try { ensureRemotePeer(sess, eventObject); } catch (peerError10) { slog(env.swapId, peerError10.message || peerError10); return; }
+			sess.execution = sess.execution || {};
+			if (!(sess.execution.rodClaim && !sess.execution.rodClaim.remoteOnly)) {
+				sess.execution.rodClaim = $.extend({}, sess.execution.rodClaim || {}, p, { remoteOnly: true });
+			}
 			try { SWAP.safeAdvance(sess, 'ROD_CLAIMED', 'Remote ROD claim evidence'); } catch (e5) {}
 			slog(env.swapId, '← ROD claimed evidence'); ENGINE.saveLive(sess);
 		}
 		if (env.type === 'swap_complete' && !isLocalEcho(sess, eventObject)) {
-			sess.state = 'COMPLETE'; ENGINE.saveLive(sess);
-			ENGINE.recordTrade(sess);
-			slog(env.swapId, '✓ COMPLETE');
-			refreshHistory();
+			/* COMPLETE is terminal, and terminal used to stop the refund
+			   monitor dead. A single spoofed (or merely premature) message
+			   therefore disarmed the honest side permanently: it never
+			   refunded, and the counterparty took both legs at leisure. Only
+			   the local settlement path may declare COMPLETE; a peer's word is
+			   recorded as a hint and nothing more. */
+			try { ensureRemotePeer(sess, eventObject); } catch (peerError11) { slog(env.swapId, peerError11.message || peerError11); return; }
+			sess.remoteReportedComplete = true;
+			ENGINE.saveLive(sess);
+			slog(env.swapId, '← Counterparty reports COMPLETE — verifying on chain');
+			confirmCompletionOnChain(sess);
 		}
 		showActiveSwap(sess.swapId);
 		refreshSwaps();
@@ -2445,7 +2897,7 @@ $(function () {
 	function refreshHistory() {
 		var h = ENGINE.getHistory();
 		$('#otcHistBody').html(h.map(function (t) {
-			return '<tr><td>' + esc((t.completedAt || '').slice(0, 16)) + '</td><td><code>' + esc(short(t.swapId)) + '</code></td><td>' + esc(t.role) + '</td><td>' + esc(t.rodAmount) + '</td><td>' + esc(t.ltcAmount) + '</td><td><span class="label label-' + (t.state === 'COMPLETE' ? 'success' : 'default') + '">' + esc(t.state) + '</span></td></tr>';
+			return '<tr><td>' + esc((t.completedAt || '').slice(0, 16)) + '</td><td><code>' + esc(short(t.swapId)) + '</code></td><td>' + esc(t.role) + '</td><td>' + esc(t.rodAmount) + '</td><td>' + esc(t.altAmount) + '</td><td><span class="label label-' + (t.state === 'COMPLETE' ? 'success' : 'default') + '">' + esc(t.state) + '</span></td></tr>';
 		}).join('') || '<tr><td colspan="6" class="text-muted">No trades yet.</td></tr>');
 	}
 	$('#otcClearHist').on('click', function () { ENGINE.clearHistory(); refreshHistory(); });
@@ -2456,7 +2908,24 @@ $(function () {
 		var c = ENGINE.loadConfig();
 		var def = ENGINE.defaults || {};
 		c.rodApiUrl = $.trim($('#cfgRodApi').val()) || def.rodApiUrl || 'https://api.spacexpanse.org:1234';
-		c.ltcApiUrl = $.trim($('#cfgLtcApi').val()) || def.ltcApiUrl || 'https://litecoinspace.org/api';
+		/* Per-alt-chain API base + backend driver. The legacy flat altApiUrl is
+		   kept in sync with the default alt chain so an older saved config and a
+		   newly saved one cannot disagree about the same endpoint. */
+		c.altChains = c.altChains || {};
+		$('.js-alt-api').each(function () {
+			var code = $(this).data('chain');
+			var fallback = (def.altChains && def.altChains[code] && def.altChains[code].apiUrl) || '';
+			c.altChains[code] = c.altChains[code] || {};
+			c.altChains[code].apiUrl = $.trim($(this).val()) || fallback;
+		});
+		$('.js-alt-type').each(function () {
+			var code = $(this).data('chain');
+			c.altChains[code] = c.altChains[code] || {};
+			c.altChains[code].apiType = $.trim($(this).val()) || (def.altChains && def.altChains[code] && def.altChains[code].apiType) || 'esplora';
+		});
+		if (c.altChains[SWAP.DEFAULT_ALT_CHAIN]) {
+			c.altApiUrl = c.altChains[SWAP.DEFAULT_ALT_CHAIN].apiUrl;
+		}
 		c.relays = $('#cfgRelays').val().split('\n').map($.trim).filter(Boolean);
 		if (!c.relays.length) {
 			c.relays = (ENGINE.DEFAULT_RELAYS || def.relays || []).slice();
@@ -2508,7 +2977,7 @@ $(function () {
 			var sessions = ENGINE.loadLive();
 			for (var swapId in sessions) {
 				var restored = ENGINE.restoreLive(swapId);
-				if (restored && !isTerminal(restored)) {
+				if (restored && (!isTerminal(restored) || refundStillOwed(restored))) {
 					try { autoContinueSwap(restored); } catch (e) { log('Resume failed for ' + short(swapId) + ': ' + (e.message || e)); }
 				}
 			}
@@ -2526,7 +2995,13 @@ $(function () {
 		var liveSessions = ENGINE.loadLive();
 		for (var liveSwapId in liveSessions) {
 			var liveSession = ENGINE.restoreLive(liveSwapId);
-			if (liveSession && !isTerminal(liveSession)) {
+			/* Terminal sessions still need the refund monitor: 'declined',
+			   'COMPLETE' and the *_REFUNDED states are all reachable from a
+			   counterparty message, and a matured refund that is never
+			   broadcast is total loss. Without this the terminal branch in
+			   autoContinueSwap only ran when a peer happened to send
+			   something, which is exactly when a peer has gone quiet. */
+			if (liveSession && (!isTerminal(liveSession) || refundStillOwed(liveSession))) {
 				try { autoContinueSwap(liveSession); } catch (tickError) {}
 			}
 		}
@@ -2539,6 +3014,7 @@ $(function () {
 	}, 30000);
 	/* Generate random ROD name on every page load */
 	$('#nsOrderName').val('d/otc-swap/' + randomOrderNameSuffix());
+	refreshAltChainLabels();
 	refreshSwaps();
 	log('OTC swap app ready — Nostr connecting automatically');
 });

@@ -9,6 +9,34 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
 
 ## [Unreleased]
 
+### Added
+- Multi-chain alt-leg expansion across the OTC runtime:
+  - Registered mainnet network profiles for DOGE, BTC, and BCH in [`js/coin.js`](js/coin.js), including chain-specific version bytes, SegWit capability flags, explorer links, and default backend types.
+  - Added the explorer adapter layer in [`js/otc-explorer.js`](js/otc-explorer.js) so non-ROD chains can be queried through a normalized Esplora-shaped interface while still using BlockCypher for DOGE and Blockchair for BCH.
+  - Added DOGE/BTC/BCH definitions and per-chain relay-policy tables in [`js/otc-chains.js`](js/otc-chains.js) so fee-rate, dust, change-threshold, and refund-window calculations stay chain-specific instead of LTC-specific.
+  - Added fast browser invariants in [`tests/harness/unit-browser-test.js`](tests/harness/unit-browser-test.js) and expanded the full matrix runner in [`tests/harness/run-all.sh`](tests/harness/run-all.sh) to cover happy-path, ROD-refund, alt-refund, and reload scenarios across LTC, DOGE, BTC, and BCH.
+
+### Changed
+- The wallet coin selector in [`index.html`](index.html) now exposes DOGE, BTC, and BCH in addition to ROD and LTC, and the runtime loads [`js/otc-explorer.js`](js/otc-explorer.js) before OTC modules so explorer-backed chain I/O is available at startup.
+- OTC swap code no longer treats the counter-leg as implicitly Litecoin. [`js/otc-swap.js`](js/otc-swap.js), [`js/otc-engine.js`](js/otc-engine.js), [`js/otc-app-ui.js`](js/otc-app-ui.js), and [`js/otc-nostr.js`](js/otc-nostr.js) were generalized from `ltc*` naming and logic to `alt*`, with terms, histories, funding evidence, refund handling, and relay messages now bound to `terms.altChain`.
+- Funding, claim, and refund transaction construction now enforces per-chain relay and dust policy from [`js/otc-chains.js`](js/otc-chains.js), including DOGE soft-dust surcharges, BTC/BCH fee floors, and change-output suppression when a remainder would be uneconomic or non-standard.
+- BCH signing paths now pin the fork-id sighash rule and prevout values through [`js/coin.js`](js/coin.js), [`js/coinbin.js`](js/coinbin.js), and [`js/otc-engine.js`](js/otc-engine.js) so wallet sends and OTC settlement/refund signatures use the BCH-required preimage instead of legacy Bitcoin signing.
+- Explorer and OTC API calls now dispatch through normalized backend adapters rather than assuming Esplora or the ROD JSON-RPC wrapper directly, allowing DOGE/BTC/BCH transaction, outspend, balance, tip-height, and broadcast flows to share the same downstream logic.
+- [`_headers`](_headers) `connect-src` now permits [`https://api.blockcypher.com`](https://api.blockcypher.com), [`https://mempool.space`](https://mempool.space), and [`https://api.blockchair.com`](https://api.blockchair.com) so deployed PWA requests for DOGE/BTC/BCH backends are not blocked by CSP.
+- [`sw.js`](sw.js) now caches [`js/otc-explorer.js`](js/otc-explorer.js) and bumps `STATIC_CACHE_VERSION` to `rod-wallet-static-v2.7.1-alpha.0`.
+
+### Security
+- OTC Nostr envelope validation in [`js/otc-nostr.js`](js/otc-nostr.js) now requires a valid Schnorr signature instead of accepting unsigned events whose `event.id` could be recomputed by an attacker.
+- Wallet coin selection and address-generation flows in [`js/coinbin.js`](js/coinbin.js) now honor per-chain SegWit capability, hiding or forcing off SegWit options where the selected chain does not support them, especially DOGE and BCH.
+- Wallet broadcast success rendering in [`js/coinbin.js`](js/coinbin.js) now validates that an API-returned txid is actually a 64-hex transaction id before interpolating it into UI HTML.
+
+### Verification
+- Evidence in the current working tree shows the proof harness was expanded rather than merely renamed: [`tests/harness/run-all.sh`](tests/harness/run-all.sh) now enumerates LTC, DOGE, BTC, and BCH scenario matrices, and [`tests/harness/unit-browser-test.js`](tests/harness/unit-browser-test.js) asserts chain constants, fee/dust rules, explorer-adapter behavior, and terms-hash binding for all supported alt chains.
+- Current tracked release metadata is partial: [`sw.js`](sw.js) contains a `v2.7.1-alpha.0` static-cache bump, but there is no corresponding tracked diff in [`CHANGELOG.md`](CHANGELOG.md) before this update, [`manifest.webmanifest`](manifest.webmanifest), or [`sha1sum`](sha1sum). This means cache-version metadata has moved ahead of manifest/checksum release metadata in the present working tree.
+
+### Documentation
+- Updated repository guidance in [`AGENTS.md`](AGENTS.md) to document the proof harness, multi-chain defaults, explorer-adapter boundaries, BTC/BCH address-shape caveat, refund-window timing rules, and signature/refund-safety invariants that now matter for OTC changes.
+
 ## [2.4.0-alpha.0] - 2026-07-24
 
 ### Documentation

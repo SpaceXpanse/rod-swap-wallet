@@ -36,20 +36,75 @@
 'use strict';
 const path = require('path');
 const { chromium } = require('playwright');
-const { MockChain, rodApiServer, esploraServer, nostrRelay, staticServer } = require('./mock-infra');
+const { MockChain, rodApiServer, esploraServer, blockcypherServer, blockchairServer, nostrRelay, staticServer } = require('./mock-infra');
 
-const APP_DIR = process.env.APP_DIR || path.resolve('/root/work/baseline');
+const APP_DIR = process.env.APP_DIR || path.resolve(__dirname, '..', '..');
 const SCENARIO = process.env.SCENARIO || 'happy';
-const PORTS = { app: 9300, rod: 9301, ltc: 9302, relay: 9303 };
+/* Which chain the counter leg runs on. Everything below is derived from this,
+   so the identical proof runs against Litecoin-over-Esplora and
+   Dogecoin-over-BlockCypher — different version bytes, different fee and dust
+   policy, and a different API shape. */
+const ALT = (process.env.ALT_CHAIN || 'LTC').toUpperCase();
+
+const ALT_PROFILES = {
+  LTC: {
+    /* 0.05 LTC is deliberately under 0.21 LTC (21,000,000 sats): that range is
+       what the historical satoshi/coin unit bug mis-read as coin-denominated. */
+    amount: '0.05000000',
+    claimFee: 1000,
+    refundBlocks: 40,
+    apiType: 'esplora',
+    apiPath: '/api',
+    startServer: (chain, port) => esploraServer(chain, port)
+  },
+  DOGE: {
+    /* 500 DOGE. Dogecoin's dust limits are ABSOLUTE (0.001 DOGE hard,
+       0.01 DOGE soft), so amounts are chosen to sit clear of both while the
+       0.01 DOGE settlement fee still clears the 1000 koinu/B mining floor for
+       a ~305-byte 2-of-2 P2SH spend. */
+    amount: '500.00000000',
+    claimFee: 1000000,
+    refundBlocks: 60,
+    apiType: 'blockcypher',
+    apiPath: '',
+    startServer: (chain, port) => blockcypherServer(chain, port)
+  },
+  BTC: {
+    /* 0.01 BTC — well above the 546-sat dust limit. The 5000-sat settlement
+       fee clears the 1 sat/byte relay floor for a ~305-byte 2-of-2 P2SH spend
+       at ~16.4 sat/byte. mempool.space is Esplora-compatible. */
+    amount: '0.01000000',
+    claimFee: 5000,
+    refundBlocks: 6,
+    apiType: 'esplora',
+    apiPath: '/api',
+    startServer: (chain, port) => esploraServer(chain, port)
+  },
+  BCH: {
+    /* 0.01 BCH — same dust policy as BTC. The 1000-sat settlement fee clears
+       the 1 sat/byte relay floor. Blockchair is the only keyless BCH API. */
+    amount: '0.01000000',
+    claimFee: 1000,
+    refundBlocks: 6,
+    apiType: 'blockchair',
+    apiPath: '',
+    startServer: (chain, port) => blockchairServer(chain, port)
+  }
+};
+const ALT_PROFILE = ALT_PROFILES[ALT];
+if (!ALT_PROFILE) throw new Error('Unsupported ALT_CHAIN: ' + ALT);
+
+const PORTS = { app: 9300, rod: 9301, alt: 9302, relay: 9303 };
 const ROD_AMOUNT = '100.00000000';
-const LTC_AMOUNT = '0.05000000'; // < 0.21 LTC guards the historical unit bug
+const ALT_AMOUNT = ALT_PROFILE.amount;
 const START_HEIGHT = 500000;
 const RELEASE_HEIGHT = 500002;
 const REFUND_ROD_BLOCKS = 30;   // refundRodHeight = 500030
-const LTC_REFUND_BLOCKS = 40;   // ltcRefundLockHeight = 500040
-const ROD_CLAIM_FEE = 51900;
-const LTC_CLAIM_FEE = 1000;
-const ROD_REFUND_FEE = 51900;
+const ALT_REFUND_BLOCKS = ALT_PROFILE.refundBlocks;
+const ROD_CLAIM_FEE = 71000;
+const ALT_CLAIM_FEE = ALT_PROFILE.claimFee;
+const ROD_REFUND_FEE = 71000;
+const ALT_AMOUNT_SATS = Math.round(parseFloat(ALT_AMOUNT) * 1e8);
 
 const results = { steps: [], ok: true };
 function step(name, ok, detail) {
@@ -70,37 +125,53 @@ async function waitFor(fn, timeoutMs, label) {
 
 async function main() {
   const rodChain = new MockChain('ROD');
-  const ltcChain = new MockChain('LTC');
+  const altChain = new MockChain(ALT);
   rodChain.height = START_HEIGHT;
-  ltcChain.height = START_HEIGHT;
+  altChain.height = START_HEIGHT;
   await rodApiServer(rodChain, PORTS.rod);
-  await esploraServer(ltcChain, PORTS.ltc);
+  await ALT_PROFILE.startServer(altChain, PORTS.alt);
   const relay = nostrRelay(PORTS.relay);
   await staticServer(APP_DIR, PORTS.app);
-  console.log(`mock servers up · scenario=${SCENARIO} · app=${APP_DIR}`);
+  console.log(`mock servers up · scenario=${SCENARIO} · alt=${ALT} via ${ALT_PROFILE.apiType} · app=${APP_DIR}`);
 
   const rodConfirmationsCfg = SCENARIO === 'refund' ? 3 : 1;
 
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
   const mkContext = async (label) => {
     const ctx = await browser.newContext({ serviceWorkers: 'block' });
-    await ctx.addInitScript(({ rodPort, ltcPort, relayPort, rodConfs }) => {
+    await ctx.addInitScript(({ rodPort, altPort, relayPort, rodConfs, altCode, altType, altPath, altRefundBlocks }) => {
+      const altUrl = 'http://127.0.0.1:' + altPort + altPath;
+      const altChains = {};
+      altChains[altCode] = {
+        apiUrl: altUrl,
+        apiType: altType,
+        refundBlocks: altRefundBlocks,
+        confirmations: 1
+      };
       localStorage.setItem('rodOtcEngineConfig', JSON.stringify({
         rodApiUrl: 'http://127.0.0.1:' + rodPort,
-        ltcApiUrl: 'http://127.0.0.1:' + ltcPort + '/api',
+        altApiUrl: altUrl,
+        altChains: altChains,
         relays: ['ws://127.0.0.1:' + relayPort],
         releaseBlocks: 2,
         refundRodBlocks: 30,
-        ltcRefundBlocks: 40,
+        altRefundBlocks: altRefundBlocks,
         rodConfirmations: rodConfs,
-        ltcConfirmations: 1,
+        altConfirmations: 1,
         tickMs: 1500
       }));
-    }, { rodPort: PORTS.rod, ltcPort: PORTS.ltc, relayPort: PORTS.relay, rodConfs: rodConfirmationsCfg });
+      localStorage.setItem('rodOtcTestAltChain', altCode);
+    }, {
+      rodPort: PORTS.rod, altPort: PORTS.alt, relayPort: PORTS.relay, rodConfs: rodConfirmationsCfg,
+      altCode: ALT, altType: ALT_PROFILE.apiType, altPath: ALT_PROFILE.apiPath, altRefundBlocks: ALT_REFUND_BLOCKS
+    });
     const page = await ctx.newPage();
     page.on('console', (m) => {
       if (m.type() === 'error') console.log(`[${label} console.error] ${m.text()}`);
     });
+    if (process.env.TRACE_404) {
+      page.on('response', (r) => { if (r.status() >= 400) console.log(`[${label} HTTP ${r.status()}] ${r.url()}`); });
+    }
     page.on('pageerror', (e) => console.log(`[${label} pageerror] ${e.message}`));
     await page.goto(`http://127.0.0.1:${PORTS.app}/index.html`, { waitUntil: 'load' });
     await page.waitForFunction(() => window.rodOtc && window.rodOtc.engine && window.jQuery);
@@ -120,10 +191,10 @@ async function main() {
     $('#walletKeys .pubkey').val(keys.pubkey);
     $('#walletAddress').text(keys.address);
     const prevNet = coinjs.activeNetwork;
-    coinjs.setNetwork('LTC');
-    const ltcAddress = coinjs.wif2address(keys.wif).address;
+    coinjs.setNetwork(localStorage.getItem('rodOtcTestAltChain') || 'LTC');
+    const altAddress = coinjs.wif2address(keys.wif).address;
     coinjs.setNetwork(prevNet || 'ROD');
-    return { address: keys.address, ltcAddress, pubkey: keys.pubkey, wif: keys.wif };
+    return { address: keys.address, altAddress, pubkey: keys.pubkey, wif: keys.wif };
   });
   const setWallet = (page, wallet) => page.evaluate((w) => {
     $('#walletKeys .privkey').val(w.wif);
@@ -133,11 +204,13 @@ async function main() {
   }, wallet);
   const aliceWallet = await mkWallet(alice);
   const bobWallet = await mkWallet(bob);
-  console.log('alice ROD addr', aliceWallet.address, '| bob ROD addr', bobWallet.address, '| bob LTC addr', bobWallet.ltcAddress);
+  console.log('alice ROD addr', aliceWallet.address, '| bob ROD addr', bobWallet.address, `| bob ${ALT} addr`, bobWallet.altAddress);
 
   rodChain.credit(aliceWallet.address, 2000 * 1e8);
-  ltcChain.credit(bobWallet.ltcAddress, Math.round(0.2 * 1e8));
-  ltcChain.credit(bobWallet.ltcAddress, Math.round(0.03 * 1e8));
+  /* Two UTXOs, sized relative to the swap amount so the same multi-input
+     selection path is exercised on every alt chain. */
+  altChain.credit(bobWallet.altAddress, ALT_AMOUNT_SATS * 4);
+  altChain.credit(bobWallet.altAddress, Math.round(ALT_AMOUNT_SATS * 0.6));
 
   for (const [label, page] of [['alice', alice], ['bob', bob]]) {
     const suite = await page.evaluate(() => rodOtc.validation.runAll());
@@ -161,16 +234,19 @@ async function main() {
   step('swap accounts derived (both)', !!bobXpub, 'bob xpub ' + bobXpub.slice(0, 12) + '…');
 
   // ---- Alice creates & starts the swap ----
-  await alice.evaluate(({ rod, ltc, peerXpub, peerRodPayout, release }) => {
+  await alice.evaluate(({ rod, alt, altCode, peerXpub, peerRodPayout, release }) => {
+    /* Select the counter chain FIRST: fees, dust limits, refund block counts
+       and the payout address all derive from it. */
+    $('#nsAltChain').val(altCode).trigger('change');
     $('#nsRole').val('alice');
     $('#nsRod').val(rod);
-    $('#nsLtc').val(ltc);
+    $('#nsAlt').val(alt);
     $('#nsRelease').val(String(release));
     $('#nsPeer').val('bob-e2e-test');
     $('#nsPeerXpub').val(peerXpub);
     $('#nsPeerPayoutAddr').val(peerRodPayout);
     $('#nsCreate').click();
-  }, { rod: ROD_AMOUNT, ltc: LTC_AMOUNT, peerXpub: bobXpub, peerRodPayout: bobWallet.address, release: RELEASE_HEIGHT });
+  }, { rod: ROD_AMOUNT, alt: ALT_AMOUNT, altCode: ALT, peerXpub: bobXpub, peerRodPayout: bobWallet.address, release: RELEASE_HEIGHT });
 
   const swapId = await waitFor(() => alice.evaluate(() => $('#nsSwapId').val() || null), 20000, 'alice swap created');
   step('alice created swap session', !!swapId, 'swapId ' + swapId.slice(0, 16) + '…');
@@ -180,19 +256,19 @@ async function main() {
     const s = rodOtc.engine.restoreLive(id);
     return {
       refundRodHeight: s.terms.refundRodHeight,
-      ltcRefundLockHeight: s.terms.ltcRefundLockHeight,
+      altRefundLockHeight: s.terms.altRefundLockHeight,
       rodConfirmations: s.terms.rodConfirmations,
-      ltcConfirmations: s.terms.ltcConfirmations,
+      altConfirmations: s.terms.altConfirmations,
       sellerRodRefundAddress: s.terms.sellerRodRefundAddress,
-      buyerLtcRefundAddress: s.terms.buyerLtcRefundAddress,
+      buyerAltRefundAddress: s.terms.buyerAltRefundAddress,
       nonce: s.terms.termsNonce
     };
   }, swapId);
   step('terms include refund heights + confirmations + 5-field swapId nonce',
     termsCheck.refundRodHeight === START_HEIGHT + REFUND_ROD_BLOCKS &&
-    termsCheck.ltcRefundLockHeight === START_HEIGHT + LTC_REFUND_BLOCKS &&
+    termsCheck.altRefundLockHeight === START_HEIGHT + ALT_REFUND_BLOCKS &&
     termsCheck.rodConfirmations === rodConfirmationsCfg &&
-    !!termsCheck.sellerRodRefundAddress && !!termsCheck.buyerLtcRefundAddress && !!termsCheck.nonce,
+    !!termsCheck.sellerRodRefundAddress && !!termsCheck.buyerAltRefundAddress && !!termsCheck.nonce,
     JSON.stringify(termsCheck));
 
   await waitFor(() => bob.evaluate((id) => {
@@ -213,11 +289,11 @@ async function main() {
   // ---- pre-funding pipeline → PREPARED on both, with NOTHING broadcast ----
   await waitFor(() => alice.evaluate((id) => {
     const s = rodOtc.engine.restoreLive(id);
-    return (s && s.rodRefund && s.rodRefund.signedHex && s.localRodAdaptorSignature && s.remoteLtcAdaptorSignature && s.localPrepared) ? true : null;
+    return (s && s.rodRefund && s.rodRefund.signedHex && s.localRodAdaptorSignature && s.remoteAltAdaptorSignature && s.localPrepared) ? true : null;
   }, swapId), 90000, 'alice PREPARED (refund signed + adaptor sigs verified)');
   await waitFor(() => bob.evaluate((id) => {
     const s = rodOtc.engine.restoreLive(id);
-    return (s && s.ltcRefund && s.ltcRefund.signedHex && s.localLtcAdaptorSignature && s.remoteRodAdaptorSignature && s.localPrepared) ? true : null;
+    return (s && s.altRefund && s.altRefund.signedHex && s.localAltAdaptorSignature && s.remoteRodAdaptorSignature && s.localPrepared) ? true : null;
   }, swapId), 90000, 'bob PREPARED (refund signed + adaptor sigs verified)');
   step('both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures', true);
 
@@ -227,25 +303,27 @@ async function main() {
   }, swapId);
   const bobRefund = await bob.evaluate((id) => {
     const s = rodOtc.engine.restoreLive(id);
-    return { signedHex: s.ltcRefund.signedHex, lockHeight: s.ltcRefund.lockHeight, plannedTxid: s.plannedLtcFunding.txid };
+    return { signedHex: s.altRefund.signedHex, lockHeight: s.altRefund.lockHeight, plannedTxid: s.plannedAltFunding.txid };
   }, swapId);
   step('refund locktimes match terms',
-    aliceRefund.lockHeight === START_HEIGHT + REFUND_ROD_BLOCKS && bobRefund.lockHeight === START_HEIGHT + LTC_REFUND_BLOCKS,
-    `ROD refund locks at ${aliceRefund.lockHeight}, LTC refund locks at ${bobRefund.lockHeight}`);
+    aliceRefund.lockHeight === START_HEIGHT + REFUND_ROD_BLOCKS && bobRefund.lockHeight === START_HEIGHT + ALT_REFUND_BLOCKS,
+    `ROD refund locks at ${aliceRefund.lockHeight}, ${ALT} refund locks at ${bobRefund.lockHeight}`);
 
   if (SCENARIO === 'happy') {
     await runHappyPath();
+  } else if (SCENARIO === 'altrefund') {
+    await runAltRefundPath();
   } else {
     await runRefundPath();
   }
 
   const fs = require('fs');
-  fs.writeFileSync(`/root/work/harness/e2e-report-${SCENARIO}.json`, JSON.stringify({
+  fs.writeFileSync(path.join(__dirname, `e2e-report-${ALT.toLowerCase()}-${SCENARIO}.json`), JSON.stringify({
     scenario: SCENARIO,
     swapId,
     steps: results.steps,
     rodBroadcasts: rodChain.broadcasts,
-    ltcBroadcasts: ltcChain.broadcasts,
+    altBroadcasts: altChain.broadcasts,
     relayEventTypes: relay.events.map((e) => {
       try { return JSON.parse(e.content).type; } catch (err) { return 'unknown'; }
     })
@@ -278,10 +356,10 @@ async function main() {
     step('timeline: PREPARED precedes ROD funding broadcast', preparedIdx !== -1 && fundedIdx !== -1 && preparedIdx < fundedIdx,
       timeline.join(' → '));
 
-    await waitFor(() => ltcChain.broadcasts.length > 0 || null, 120000, 'LTC funding broadcast');
-    const ltcFundingB = ltcChain.broadcasts[0];
-    step('LTC funding tx broadcast & independently validated (0.05 LTC < 0.21 LTC)', ltcFundingB.valid, ltcFundingB.details.join(' | '));
-    step('LTC funding txid equals PLANNED txid', ltcFundingB.txid === bobRefund.plannedTxid);
+    await waitFor(() => altChain.broadcasts.length > 0 || null, 120000, `${ALT} funding broadcast`);
+    const altFundingB = altChain.broadcasts[0];
+    step(`${ALT} funding tx broadcast & independently validated (${ALT_AMOUNT} ${ALT})`, altFundingB.valid, altFundingB.details.join(' | '));
+    step(`${ALT} funding txid equals PLANNED txid`, altFundingB.txid === bobRefund.plannedTxid);
 
     if (process.env.RELOAD_TEST === '1') {
       await alice.reload({ waitUntil: 'load' });
@@ -291,7 +369,7 @@ async function main() {
       await waitFor(() => alice.evaluate(() => (rodOtc.engine.pool && rodOtc.engine.pool.count() >= 1) || null), 15000, 'alice relay reconnect after reload');
       const persisted = await alice.evaluate((id) => {
         const s = rodOtc.engine.restoreLive(id);
-        return !!(s && s.remoteLtcAdaptorSignature && s.rodRefund && s.rodRefund.signedHex && s.adaptorSecret);
+        return !!(s && s.remoteAltAdaptorSignature && s.rodRefund && s.rodRefund.signedHex && s.adaptorSecret);
       }, swapId);
       step('after reload: adaptor sig, refund and secret persisted', persisted);
     }
@@ -299,9 +377,9 @@ async function main() {
     // release the claim height gate
     rodChain.height = RELEASE_HEIGHT + 1;
 
-    await waitFor(() => ltcChain.broadcasts.length > 1 || null, 120000, 'LTC claim broadcast');
-    const ltcClaimB = ltcChain.broadcasts[1];
-    step('LTC claim tx (2-of-2 P2SH, completed adaptor sig) broadcast & independently validated', ltcClaimB.valid, ltcClaimB.details.join(' | '));
+    await waitFor(() => altChain.broadcasts.length > 1 || null, 120000, `${ALT} claim broadcast`);
+    const altClaimB = altChain.broadcasts[1];
+    step(`${ALT} claim tx (2-of-2 P2SH, completed adaptor sig) broadcast & independently validated`, altClaimB.valid, altClaimB.details.join(' | '));
 
     // Bob recovers the secret FROM THE REAL SIGNATURE
     await waitFor(() => bob.evaluate((id) => {
@@ -336,19 +414,19 @@ async function main() {
     const dests = await alice.evaluate((id) => {
       const s = rodOtc.engine.restoreLive(id);
       return {
-        sellerLtcPayout: s.terms.sellerLtcPayoutAddress,
+        sellerAltPayout: s.terms.sellerAltPayoutAddress,
         buyerRodPayout: s.terms.buyerRodPayoutAddress,
-        ltcMultisig: s.terms.ltcFunding.multisigAddress,
+        altMultisig: s.terms.altFunding.multisigAddress,
         rodMultisig: s.terms.rodFunding.multisigAddress
       };
     }, swapId);
-    const aliceGotLtc = ltcChain.balance(dests.sellerLtcPayout);
+    const aliceGotAlt = altChain.balance(dests.sellerAltPayout);
     const bobGotRod = rodChain.balance(dests.buyerRodPayout);
-    step('alice received LTC at her payout address', aliceGotLtc === Math.round(0.05 * 1e8) - LTC_CLAIM_FEE,
-      `${aliceGotLtc} sats at ${dests.sellerLtcPayout}`);
+    step(`alice received ${ALT} at her payout address`, aliceGotAlt === ALT_AMOUNT_SATS - ALT_CLAIM_FEE,
+      `${aliceGotAlt} sats at ${dests.sellerAltPayout}`);
     step('bob received ROD at his payout address', bobGotRod === Math.round(100 * 1e8) - ROD_CLAIM_FEE,
       `${bobGotRod} sats at ${dests.buyerRodPayout}`);
-    step('LTC multisig fully swept', ltcChain.balance(dests.ltcMultisig) === 0);
+    step(`${ALT} multisig fully swept`, altChain.balance(dests.altMultisig) === 0);
     step('ROD multisig fully swept', rodChain.balance(dests.rodMultisig) === 0);
 
     // atomicity proof: NO normal-signature messages were ever needed
@@ -358,9 +436,9 @@ async function main() {
       'message types seen: ' + [...new Set(relayTypes)].join(', '));
 
     const invalidRod = rodChain.broadcasts.filter((b) => !b.valid);
-    const invalidLtc = ltcChain.broadcasts.filter((b) => !b.valid);
+    const invalidAlt = altChain.broadcasts.filter((b) => !b.valid);
     step('zero invalid broadcast attempts (ROD)', invalidRod.length === 0, invalidRod.map((b) => b.details.join()).join('; '));
-    step('zero invalid broadcast attempts (LTC)', invalidLtc.length === 0, invalidLtc.map((b) => b.details.join()).join('; '));
+    step(`zero invalid broadcast attempts (${ALT})`, invalidAlt.length === 0, invalidAlt.map((b) => b.details.join()).join('; '));
   }
 
   /* ================= refund path ================= */
@@ -371,8 +449,8 @@ async function main() {
 
     // Bob requires 3 confirmations; height is frozen at 1 conf → he must NOT fund LTC
     await new Promise((r) => setTimeout(r, 8000)); // several automation ticks
-    step('confirmation gate held: Bob did NOT fund LTC at 1/3 confirmations', ltcChain.broadcasts.length === 0,
-      `ltc broadcasts: ${ltcChain.broadcasts.length}`);
+    step(`confirmation gate held: Bob did NOT fund ${ALT} at 1/3 confirmations`, altChain.broadcasts.length === 0,
+      `alt broadcasts: ${altChain.broadcasts.length}`);
 
     // refund is non-final before lock height
     const probe = rodChain.validateAndAccept(aliceRefund.signedHex);
@@ -406,7 +484,66 @@ async function main() {
 
     const invalidRod = rodChain.broadcasts.filter((b) => !b.valid);
     step('zero invalid broadcast attempts (ROD)', invalidRod.length === 0, invalidRod.map((b) => b.details.join()).join('; '));
-    step('zero LTC broadcasts at all (Bob never funded)', ltcChain.broadcasts.length === 0);
+    step(`zero ${ALT} broadcasts at all (Bob never funded)`, altChain.broadcasts.length === 0);
+  }
+
+  /* ================= alt-leg refund path =================
+     The mirror image of runRefundPath, and the case that matters most for a
+     newly-added chain: BOTH legs are funded, then the secret holder vanishes
+     WITHOUT claiming. Bob must be able to recover his alt coin using only the
+     refund he pre-signed before any coin moved. This exercises a timelocked
+     2-of-2 P2SH spend under the alt chain's own consensus and relay policy —
+     on Dogecoin that means legacy sighash, low-S DER, nLockTime finality with
+     sequence 0xfffffffe, the absolute dust limits and the koinu/byte fee
+     floor, none of which the Litecoin path proves. */
+  async function runAltRefundPath() {
+    await waitFor(() => rodChain.broadcasts.length > 0 || null, 60000, 'ROD funding broadcast');
+    step('ROD funding tx broadcast & independently validated', rodChain.broadcasts[0].valid,
+      rodChain.broadcasts[0].details.join(' | '));
+
+    await waitFor(() => altChain.broadcasts.length > 0 || null, 120000, `${ALT} funding broadcast`);
+    const altFundingB = altChain.broadcasts[0];
+    step(`${ALT} funding tx broadcast & independently validated`, altFundingB.valid, altFundingB.details.join(' | '));
+    step(`${ALT} funding txid equals PLANNED txid`, altFundingB.txid === bobRefund.plannedTxid);
+
+    /* The pre-signed alt refund must be worthless until its lock height. */
+    const probe = altChain.validateAndAccept(bobRefund.signedHex);
+    step(`pre-signed ${ALT} refund rejected as non-final before lock height`,
+      !probe.ok && /non-final/.test(probe.error || ''), probe.error || 'UNEXPECTEDLY ACCEPTED');
+
+    /* Alice vanishes holding the secret, without ever claiming. */
+    await alice.context().close();
+    step('alice disappeared (context closed) without claiming', true);
+
+    altChain.height = START_HEIGHT + ALT_REFUND_BLOCKS + 5;
+
+    await waitFor(() => altChain.broadcasts.length > 1 || null, 120000, `${ALT} refund broadcast by automation`);
+    const altRefundB = altChain.broadcasts[1];
+    step(`pre-signed ${ALT} refund broadcast & independently validated (locktime + 2-of-2 sigs + ${ALT} policy)`,
+      altRefundB.valid, altRefundB.details.join(' | '));
+
+    const bobState = await waitFor(() => bob.evaluate((id) => {
+      const s = rodOtc.engine.restoreLive(id);
+      return (s && /REFUND/.test(s.state)) ? s.state : null;
+    }, swapId), 60000, 'bob refund state');
+    step('bob session reached a refund state', /REFUND/.test(bobState), bobState);
+
+    const bobDests = await bob.evaluate((id) => {
+      const t = rodOtc.engine.restoreLive(id).terms;
+      return { refundAddr: t.buyerAltRefundAddress, multisig: t.altFunding.multisigAddress, refundFee: t.altRefundFee };
+    }, swapId);
+    const refunded = altChain.balance(bobDests.refundAddr);
+    const expected = ALT_AMOUNT_SATS - Math.round(parseFloat(bobDests.refundFee) * 1e8);
+    step(`${ALT} returned to Bob's refund address (amount minus refund fee)`, refunded === expected,
+      `${refunded} vs expected ${expected} at ${bobDests.refundAddr}`);
+    step(`${ALT} multisig fully swept by refund`, altChain.balance(bobDests.multisig) === 0);
+
+    const invalidAlt = altChain.broadcasts.filter((b) => !b.valid);
+    step(`zero invalid broadcast attempts (${ALT})`, invalidAlt.length === 0,
+      invalidAlt.map((b) => b.details.join()).join('; '));
+    step('alice never claimed: no secret was ever revealed on the alt chain',
+      altChain.broadcasts.filter((b) => b.valid).length === 2,
+      `${altChain.broadcasts.length} alt broadcasts (funding + refund only)`);
   }
 }
 

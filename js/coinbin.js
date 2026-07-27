@@ -16,10 +16,17 @@ return typeof value === "string" && value !== "1";
 	var WALLET_SESSION_KEY = 'rodWalletSession';
 	var ACTIVE_COIN_KEY = 'rodActiveCoin';
 
+	/* Any coin registered in coinjs.networks is selectable; unknown values fall
+	   back to ROD so a stale localStorage entry cannot leave the wallet on a
+	   network that no longer exists. */
+	function normalizeCoinCode(code){
+		var c = String(code || 'ROD').toUpperCase();
+		return (coinjs.networks && coinjs.networks[c]) ? c : 'ROD';
+	}
+
 	function getActiveCoin(){
 		try {
-			var c = (window.localStorage.getItem(ACTIVE_COIN_KEY) || 'ROD').toUpperCase();
-			return (c === 'LTC') ? 'LTC' : 'ROD';
+			return normalizeCoinCode(window.localStorage.getItem(ACTIVE_COIN_KEY));
 		} catch (e) {
 			return 'ROD';
 		}
@@ -70,6 +77,15 @@ return typeof value === "string" && value !== "1";
 	function refreshSiteCoinLabels(){
 		var net = coinjs.getNetwork ? coinjs.getNetwork() : {'code':'ROD','unit':'ROD','name':'SpaceXpanse ROD'};
 		var unit = net.unit || net.code || 'ROD';
+		/* Hide the SegWit controls entirely on chains that do not implement it,
+		   rather than offering an option that silently produces dead addresses. */
+		var segwitCapable = !coinjs.supportsSegwit || coinjs.supportsSegwit();
+		$('#walletSegwit').closest('.walletOptions, .checkbox, div').first().toggle(!!segwitCapable);
+		if(!segwitCapable){
+			$('#walletSegwit')[0] && ($('#walletSegwit')[0].checked = false);
+			$('#walletSegwitp2sh')[0] && ($('#walletSegwitp2sh')[0].checked = false);
+			$('#walletSegwitBech32')[0] && ($('#walletSegwitBech32')[0].checked = false);
+		}
 		$('#activeCoinBadge').text(unit);
 		$('#walletActiveCoinLabel').text(net.name || unit);
 		$('#walletBalanceCoinTag').text(unit);
@@ -91,7 +107,7 @@ return typeof value === "string" && value !== "1";
 
 	function applyActiveCoin(coin, options){
 		var opts = options || {};
-		var c = (coin === 'LTC') ? 'LTC' : 'ROD';
+		var c = normalizeCoinCode(coin);
 		try { window.localStorage.setItem(ACTIVE_COIN_KEY, c); } catch (e) { /* ignore */ }
 		if(coinjs.setNetwork){
 			coinjs.setNetwork(c);
@@ -245,6 +261,13 @@ return typeof value === "string" && value !== "1";
 	}
 
 	function getWalletAddressType(){
+		/* Dogecoin has no SegWit at all: DEPLOYMENT_SEGWIT is permanently
+		   disabled and IsWitnessEnabled() hard-returns false in Dogecoin Core,
+		   so a p2wpkh-in-p2sh or bech32 address would be unspendable. Force
+		   legacy regardless of what the (hidden) checkboxes say. */
+		if(coinjs.supportsSegwit && !coinjs.supportsSegwit()){
+			return 'legacy';
+		}
 		if($("#walletSegwit").is(":checked")){
 			return $("#walletSegwitBech32").is(":checked") ? 'bech32' : 'segwit';
 		}
@@ -600,18 +623,48 @@ return typeof value === "string" && value !== "1";
 
 			if(dvalue>=total){
 				var change = dvalue-total;
-				if((change*1)>0){
+				/* A change output below the chain's dust/change threshold makes
+				   the whole transaction non-standard, so it is signed,
+				   broadcast and rejected. Dropping the remainder to fee is the
+				   correct (and only safe) outcome. On DOGE a sub-soft-dust
+				   change also attracts a 1,000,000 koinu surcharge the fee
+				   never budgeted for. */
+				var changeSats = Math.round((change*1) * 100000000);
+				var changeChain = (coinjs.network && coinjs.network.code) || 'ROD';
+				var changeThreshold = 546;
+				try {
+					var changePolicy = window.rodOtc && rodOtc.chains ? rodOtc.chains.getPolicy(changeChain) : null;
+					if(changePolicy && changePolicy.changeThresholdSats) changeThreshold = changePolicy.changeThresholdSats;
+				} catch(changePolicyError) {}
+				if(changeSats >= changeThreshold){
 					tx.addoutput($("#walletAddress").html(), change);
+				} else if(changeSats > 0){
+					console.log('Dropping ' + changeSats + ' base units of change to fee: below ' + changeChain + ' change threshold ' + changeThreshold);
 				}
 
 				var tx2 = coinjs.transaction();
 				var txunspent = tx2.deserialize(tx.serialize());
+				/* Serialisation drops the prevout values and the fork-id rule,
+				   both of which the BCH sighash needs. Carry them across the
+				   round trip or every BCH wallet send fails to sign. */
+				txunspent.forkId = tx.forkId;
+				for(var carryIdx = 0; carryIdx < txunspent.ins.length && carryIdx < tx.ins.length; carryIdx++){
+					if(tx.ins[carryIdx].value != null) txunspent.ins[carryIdx].value = tx.ins[carryIdx].value;
+				}
 				var signed = txunspent.sign($("#walletKeys .privkey").val());
 
 				tx2.broadcast(function(data){
 					$("#walletLoader").addClass("hidden");
 					if(data && data.success){
-						$("#walletSendConfirmStatus").removeClass('hidden alert-danger').addClass('alert-success').html('Transaction broadcast successfully.<br>txid: <a href="'+explorer_tx+data.txid+'" target="_blank">'+data.txid+'</a>');
+						var broadcastTxid = String(data.txid || '');
+					if(!/^[0-9a-fA-F]{64}$/.test(broadcastTxid)){
+						/* Whatever the API returned is not a txid. Never put it
+						   in an href or innerHTML: the response is attacker
+						   controlled if the API is, and this origin holds keys. */
+						$("#walletSendConfirmStatus").removeClass('hidden alert-danger').addClass('alert-success').text('Transaction broadcast successfully, but the API returned a malformed txid.');
+					} else {
+						$("#walletSendConfirmStatus").removeClass('hidden alert-danger').addClass('alert-success').html('Transaction broadcast successfully.<br>txid: <a href="'+explorer_tx+broadcastTxid+'" target="_blank">'+broadcastTxid+'</a>');
+					}
 						$("#walletSendFailTransaction").addClass('hidden');
 						thisbtn.addClass('hidden').attr('disabled',true);
 						$("#walletSendBtn").attr('disabled',true);
@@ -705,7 +758,14 @@ return typeof value === "string" && value !== "1";
 	var walletFeeWasManuallyEdited = false;
 
 	function ensureWalletFeeMeetsRelayFloor(forceMinimumFee, estimatedInputCount){
-		var minimumSatPerByte = 100;
+		/* One hard-coded rate for five chains was wrong in both directions:
+		   10x too low on DOGE (relay floor 1000/byte, so the transaction was
+		   simply unminable) and ~50x too high on BTC/LTC/BCH. Read the
+		   per-chain relay policy instead. */
+		var activeChainCode = (coinjs.network && coinjs.network.code) || 'ROD';
+		var chainPolicy = null;
+		try { chainPolicy = window.rodOtc && rodOtc.chains ? rodOtc.chains.getPolicy(activeChainCode) : null; } catch (policyError) { chainPolicy = null; }
+		var minimumSatPerByte = (chainPolicy && chainPolicy.feeRatePerByte) ? chainPolicy.feeRatePerByte : 232;
 		var estimatedBytes = estimateWalletTransactionBytes(estimatedInputCount);
 		var minimumFeeSat = estimatedBytes * minimumSatPerByte;
 		var minimumFeeRod = (minimumFeeSat / 100000000);
@@ -1313,7 +1373,13 @@ return typeof value === "string" && value !== "1";
 					estimatedTxSize += 147
 				}
 
-				tx.addinput($(".txId",o).val(), $(".txIdN",o).val(), $(".txIdScript",o).val(), seq);
+				/* The declared input amount is required by the fork-id sighash
+				   (BCH). Passing null when it is missing makes signing fail
+				   loudly instead of producing an invalid signature. */
+				var declaredInputAmount = parseFloat($(".txIdAmount",o).val());
+				var declaredInputSats = (isFinite(declaredInputAmount) && declaredInputAmount > 0)
+					? Math.round(declaredInputAmount * 100000000) : null;
+				tx.addinput($(".txId",o).val(), $(".txIdN",o).val(), $(".txIdScript",o).val(), seq, declaredInputSats);
 			} else {
 				$('#putTabs a[href="#txinputs"]').attr('style','color:#a94442;');
 			}
@@ -2286,6 +2352,11 @@ function rawSubmitDefault(btn){
 			rel: '0x30;0xb0;0x32;0x19da462;0x19d9cfe;true;true;ltc'
 		},
 		{
+			name: 'Dogecoin Mainnet',
+			value: 'doge-mainnet',
+			rel: '0x1e;0x9e;0x16;0x2facafd;0x2fac398;true;true;'
+		},
+		{
 			name: 'SpaceXpanse ROD Testnet',
 			value: 'rod-testnet',
 			rel: '0x73;0xc6;0x89;0x43587cf;0x4358394;true;true;trod'
@@ -2373,15 +2444,14 @@ function rawSubmitDefault(btn){
 			coinjs.hdkey.prv =  $("#coinjs_hdprv").val()*1;
 
 			/* Known networks go through setNetwork so Coins menu + APIs stay consistent */
-			if (coinjs.pub == 0x30){   // LTC
+			if (coinjs.pub == 0x30){        // LTC
 				applyActiveCoin('LTC', {skipWallet: true});
 			} else if (coinjs.pub == 0x3c){ // ROD
 				applyActiveCoin('ROD', {skipWallet: true});
+			} else if (coinjs.pub == 0x1e){ // DOGE
+				applyActiveCoin('DOGE', {skipWallet: true});
 			} else {
 				coinjs.bech32.hrp = coinjs.bech32.hrp || "rod";
-				if (coinjs.pub == 0x1e){   // DOGE
-					explorer_addr = "https://chain.so/address/DOGE/";
-				}
 			}
 
 			configureBroadcast();

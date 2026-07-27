@@ -41,6 +41,7 @@
 			'multisig': 0x4b,
 			'hdkey': {'prv': 0x04881eb2, 'pub': 0x0488e4ad},
 			'bech32': {'charset': BECH32_CHARSET, 'version': 0, 'hrp': 'rod'},
+			'segwit': true,
 			'uriPrefix': 'rod',
 			'unit': 'ROD',
 			'explorer': {
@@ -59,6 +60,7 @@
 			'multisig': 0x32,
 			'hdkey': {'prv': 0x019d9cfe, 'pub': 0x019da462},
 			'bech32': {'charset': BECH32_CHARSET, 'version': 0, 'hrp': 'ltc'},
+			'segwit': true,
 			'uriPrefix': 'litecoin',
 			'unit': 'LTC',
 			'explorer': {
@@ -68,6 +70,100 @@
 			},
 			'apiType': 'esplora',
 			'apiBase': 'https://litecoinspace.org/api'
+		},
+		/* Dogecoin mainnet. Verified against dogecoin/dogecoin src/chainparams.cpp:
+		   PUBKEY_ADDRESS 30 (0x1e, "D..."), SCRIPT_ADDRESS 22 (0x16, "9.."/"A.."),
+		   SECRET_KEY 158 (0x9e). EXT_PUBLIC_KEY 0x02facafd ("dgub"),
+		   EXT_SECRET_KEY 0x02fac398 ("dgpv"). SLIP-44 coin type 3.
+		   SegWit is permanently disabled on Dogecoin (chainparams
+		   DEPLOYMENT_SEGWIT.nTimeout = 0, and IsWitnessEnabled() hard-returns
+		   false), and no bech32 code exists in Dogecoin Core — hence
+		   segwit:false with an empty hrp. The charset stays populated because
+		   coinjs.bech32_encode() reads coinjs.bech32.charset globally and the
+		   Nostr npub encoder depends on it regardless of active network. */
+		'DOGE': {
+			'code': 'DOGE',
+			'name': 'Dogecoin',
+			'pub': 0x1e,
+			'priv': 0x9e,
+			'multisig': 0x16,
+			'hdkey': {'prv': 0x02fac398, 'pub': 0x02facafd},
+			'bech32': {'charset': BECH32_CHARSET, 'version': 0, 'hrp': ''},
+			'segwit': false,
+			'uriPrefix': 'dogecoin',
+			'unit': 'DOGE',
+			'explorer': {
+				'tx': 'https://blockchair.com/dogecoin/transaction/',
+				'addr': 'https://blockchair.com/dogecoin/address/',
+				'block': 'https://blockchair.com/dogecoin/block/'
+			},
+			/* No public Dogecoin mainnet Esplora exists, so the default backend
+			   is BlockCypher — the only keyless API that serves CORS + raw tx
+			   hex + outspend lookup. Operators running their own electrs-doge
+			   can switch apiType back to 'esplora' in OTC Settings. */
+			'apiType': 'blockcypher',
+			'apiBase': 'https://api.blockcypher.com/v1/doge/main'
+		},
+		/* Bitcoin mainnet. Verified against bitcoin/bitcoin src/chainparams.cpp:
+		   PUBKEY_ADDRESS 0 (0x00, "1..."), SCRIPT_ADDRESS 5 (0x05, "3.."),
+		   SECRET_KEY 128 (0x80). BIP-32 EXT_PUBLIC_KEY 0x0488B21E (xpub),
+		   EXT_SECRET_KEY 0x0488ADE4 (xprv). Bech32 HRP "bc" (BIP-173).
+		   SegWit is fully active since block 481824 (Aug 2017). */
+		'BTC': {
+			'code': 'BTC',
+			'name': 'Bitcoin',
+			'pub': 0x00,
+			'priv': 0x80,
+			'multisig': 0x05,
+			'hdkey': {'prv': 0x0488ADE4, 'pub': 0x0488B21E},
+			'bech32': {'charset': BECH32_CHARSET, 'version': 0, 'hrp': 'bc'},
+			'segwit': true,
+			'uriPrefix': 'bitcoin',
+			'unit': 'BTC',
+			'explorer': {
+				'tx': 'https://mempool.space/tx/',
+				'addr': 'https://mempool.space/address/',
+				'block': 'https://mempool.space/block/'
+			},
+			'apiType': 'esplora',
+			'apiBase': 'https://mempool.space/api'
+		},
+		/* Bitcoin Cash mainnet. BCH forked from BTC at block 478559 (Aug 2017)
+		   and retains the ORIGINAL Bitcoin version bytes:
+		   PUBKEY_ADDRESS 0 (0x00, "1..."), SCRIPT_ADDRESS 5 (0x05, "3.."),
+		   SECRET_KEY 128 (0x80). BIP-32 keys 0x0488B21E / 0x0488ADE4.
+		   BCH introduced CashAddr (not bech32) in Jan 2018 for replay protection;
+		   this wallet uses only legacy base58 addresses, which are valid on both
+		   BTC and BCH — the protocol is safe because altChain is part of the
+		   hashed canonical terms. SegWit was explicitly rejected by BCH
+		   (DEPLOYMENT_SEGWIT was never activated); no bech32 HRP exists. */
+		'BCH': {
+			'code': 'BCH',
+			'name': 'Bitcoin Cash',
+			'pub': 0x00,
+			'priv': 0x80,
+			'multisig': 0x05,
+			'hdkey': {'prv': 0x0488ADE4, 'pub': 0x0488B21E},
+			'bech32': {'charset': BECH32_CHARSET, 'version': 0, 'hrp': ''},
+			'segwit': false,
+			/* Bitcoin Cash removed SegWit and replaced the legacy sighash with
+			   a BIP-143-style preimage carrying a mandatory SIGHASH_FORKID
+			   (0x40) bit. A signature produced the pre-fork way is not merely
+			   non-standard on BCH, it is INVALID, so the algorithm has to be
+			   selected from the network rather than assumed. */
+			'forkId': true,
+			'uriPrefix': 'bitcoincash',
+			'unit': 'BCH',
+			'explorer': {
+				'tx': 'https://blockchair.com/bitcoin-cash/transaction/',
+				'addr': 'https://blockchair.com/bitcoin-cash/address/',
+				'block': 'https://blockchair.com/bitcoin-cash/block/'
+			},
+			/* No public BCH Esplora or BlockCypher support. Blockchair is the only
+			   keyless API with CORS, raw hex and spending-tx lookup. Operators
+			   running their own electrs-cash can switch to 'esplora' in settings. */
+			'apiType': 'blockchair',
+			'apiBase': 'https://api.blockchair.com/bitcoin-cash'
 		}
 	};
 	coinjs.activeNetwork = 'ROD';
@@ -75,6 +171,20 @@
 
 	coinjs.getNetwork = function(){
 		return coinjs.networks[coinjs.activeNetwork] || coinjs.networks.ROD;
+	};
+
+	/* Whether the given (default: active) network has SegWit/bech32 at all.
+	   Dogecoin does not, so every address-GENERATING UI path must consult this
+	   before offering p2wpkh-in-p2sh or bech32. Note the low-level
+	   coinjs.segwitAddress()/coinjs.bech32Address() helpers are deliberately
+	   left unguarded: transaction signing calls them speculatively to classify
+	   an input's script, and making them throw would break legacy signing. */
+	coinjs.supportsSegwit = function(code){
+		var network = code ? (coinjs.networks[code] || null) : coinjs.getNetwork();
+		if(!network){
+			return false;
+		}
+		return network.segwit !== false;
 	};
 
 	coinjs.setNetwork = function(code){
@@ -643,24 +753,14 @@
 	/* retreive the balance from a given address (network-aware) */
 	coinjs.addressBalance = function(address, callback){
 		var network = coinjs.getNetwork();
-		if(network.apiType === 'esplora'){
-			coinjs.ajax(network.apiBase+'/address/'+encodeURIComponent(address), function(response){
-				try {
-					var parsed = JSON.parse(response);
-					if(parsed && parsed.error){
-						callback({'success': false, 'error': parsed.error, 'raw': parsed});
-						return;
-					}
-					var chain = (parsed && parsed.chain_stats) || {};
-					var mempool = (parsed && parsed.mempool_stats) || {};
-					var funded = (chain.funded_txo_sum || 0) + (mempool.funded_txo_sum || 0);
-					var spent = (chain.spent_txo_sum || 0) + (mempool.spent_txo_sum || 0);
-					var balance = ((funded - spent) / 100000000).toFixed(8);
-					callback({'success': true, 'data': [{'balance': balance}], 'raw': parsed});
-				} catch (error) {
-					callback({'success': false, 'error': 'Invalid balance response'});
-				}
-			}, "GET");
+		/* Every non-ROD chain is served through the explorer adapter, which
+		   normalises Esplora / BlockCypher / Blockchair into one shape. */
+		if(coinjs.explorer && coinjs.explorer.isSupported(network)){
+			coinjs.explorer.balance(network, address).then(function(sats){
+				callback({'success': true, 'data': [{'balance': (sats / 100000000).toFixed(8)}], 'raw': {'balanceSats': sats}});
+			}, function(error){
+				callback({'success': false, 'error': error || 'Balance lookup failed'});
+			});
 			return;
 		}
 
@@ -1379,6 +1479,17 @@
 	/* start of transaction functions */
 
 	/* create a new transaction object */
+	/* SIGHASH_FORKID. Set on Bitcoin Cash (and any future fork that adopts the
+	   same replay-protected sighash), cleared everywhere else. */
+	coinjs.SIGHASH_FORKID = 0x40;
+	coinjs.usesForkId = function(network){
+		var n = network || coinjs.network;
+		return !!(n && n.forkId);
+	};
+	coinjs.defaultSigHashType = function(network){
+		return coinjs.usesForkId(network) ? (0x01 | coinjs.SIGHASH_FORKID) : 0x01;
+	};
+
 	coinjs.transaction = function() {
 
 		var r = {};
@@ -1391,11 +1502,25 @@
 		r.block = null;
 
 		/* add an input to a transaction */
-		r.addinput = function(txid, index, script, sequence){
+		/* Pinned at build time so the signing algorithm cannot drift with the
+		   ambient coinjs.network. Both sides of a swap build the same bytes
+		   from the same chain code, so this stays consistent across peers.
+		   null = decide from the active network at signing time. */
+		r.forkId = null;
+		r.sigHashType = function(){
+			var forkId = (this.forkId != null) ? this.forkId : coinjs.usesForkId();
+			return forkId ? (0x01 | coinjs.SIGHASH_FORKID) : 0x01;
+		};
+
+		r.addinput = function(txid, index, script, sequence, value){
 			var o = {};
 			o.outpoint = {'hash':txid, 'index':index};
 			o.script = coinjs.script(script||[]);
 			o.sequence = sequence || ((r.lock_time==0) ? 4294967295 : 0);
+			/* Prevout amount in base units. Ignored by the legacy sighash,
+			   REQUIRED by the fork-id preimage - a BCH signature cannot be
+			   computed without it, so passing it is not optional on BCH. */
+			if(value != null) o.value = value;
 			return this.ins.push(o);
 		}
 
@@ -1478,29 +1603,21 @@
 				fallbackScript = '0014' + addrDecode.redeemscript;
 			}
 
-			if(network.apiType === 'esplora'){
-				coinjs.ajax(network.apiBase+'/address/'+encodeURIComponent(address)+'/utxo', function(response){
-					try {
-						var utxoArray = JSON.parse(response);
-						if(!coinjs.isArray(utxoArray)){
-							callback({'success': false, 'error': 'Unexpected unspent response', 'data': []});
-							return;
-						}
-						var data = [];
-						for (var index = 0; index < utxoArray.length; index++) {
-							var output = utxoArray[index];
-							data.push({
-								'transaction_hash': output.txid || output.transaction_hash,
-								'vout': (typeof output.vout !== 'undefined') ? output.vout : output.index,
-								'value': output.value,
-								'script_pub_key_hex': output.scriptpubkey || output.script || fallbackScript
-							});
-						}
-						callback({'success': true, 'data': data});
-					} catch (error) {
-						callback({'success': false, 'error': 'Invalid unspent response', 'data': []});
+			if(coinjs.explorer && coinjs.explorer.isSupported(network)){
+				coinjs.explorer.utxos(network, address).then(function(utxos){
+					var data = [];
+					for (var index = 0; index < utxos.length; index++) {
+						data.push({
+							'transaction_hash': utxos[index].txid,
+							'vout': utxos[index].vout,
+							'value': utxos[index].value,
+							'script_pub_key_hex': utxos[index].scriptpubkey || fallbackScript
+						});
 					}
-				}, "GET");
+					callback({'success': true, 'data': data});
+				}, function(error){
+					callback({'success': false, 'error': error || 'Unspent lookup failed', 'data': []});
+				});
 				return;
 			}
 
@@ -1539,11 +1656,24 @@
 		/* list transaction data (network-aware) */
 		r.getTransaction = function(txid, callback) {
 			var network = coinjs.getNetwork();
-			var requestUrl = network.apiType === 'esplora'
-				? network.apiBase+'/tx/'+encodeURIComponent(txid)
-				: (network.apiBase || coinjs.rodApi)+'/transaction/'+encodeURIComponent(txid);
 
-			coinjs.ajax(requestUrl, function(response){
+			/* Non-ROD chains go through the explorer adapter, which hands back
+			   an Esplora-shaped transaction regardless of which backend
+			   actually answered. The unspent-output extraction below is shared. */
+			if(coinjs.explorer && coinjs.explorer.isSupported(network)){
+				coinjs.explorer.tx(network, txid).then(function(txData){
+					try {
+						callback(extractUnspentOutputs(txid, txData));
+					} catch (error) {
+						callback({'success': false, 'error': 'Invalid transaction response', 'data': []});
+					}
+				}, function(error){
+					callback({'success': false, 'error': error || 'Transaction lookup failed', 'data': []});
+				});
+				return;
+			}
+
+			coinjs.ajax((network.apiBase || coinjs.rodApi)+'/transaction/'+encodeURIComponent(txid), function(response){
 				try {
 					var parsed = JSON.parse(response);
 					if (parsed && parsed.error) {
@@ -1551,8 +1681,16 @@
 						callback({'success': false, 'error': apiErrorMessage, 'data': []});
 						return;
 					}
+					callback(extractUnspentOutputs(txid, (parsed && parsed.result) ? parsed.result : parsed));
+				} catch (error) {
+					callback({'success': false, 'error': 'Invalid transaction response', 'data': []});
+				}
+			}, "GET");
+		}
 
-					var txData = (parsed && parsed.result) ? parsed.result : parsed;
+		/* Shared vout -> unspent-output projection for both the ROD JSON-RPC
+		   envelope and the Esplora-shaped adapter output. */
+		function extractUnspentOutputs(txid, txData){
 					var outputs = txData.vout || [];
 					var data = [];
 					for (var index = 0; index < outputs.length; index++) {
@@ -1583,11 +1721,7 @@
 							});
 						}
 					}
-					callback({'success': true, 'data': data, 'raw': txData});
-				} catch (error) {
-					callback({'success': false, 'error': 'Invalid transaction response', 'data': []});
-				}
-			}, "GET");
+						return {'success': true, 'data': data, 'raw': txData};
 		}
 
 		/* add unspent to transaction */
@@ -1618,7 +1752,11 @@
 						}
 
 						var seq = sequence || false;
-						self.addinput(txhash, n, scr, seq);
+						/* Carry the prevout value: the fork-id sighash commits
+						   to it, so a BCH input added without it cannot be
+						   signed at all (transactionHashAny throws rather than
+						   emitting a signature the network would reject). */
+						self.addinput(txhash, n, scr, seq, u["value"]);
 						value += u["value"];
 						total++;
 					}
@@ -1646,34 +1784,19 @@
 			var tx = txhex || this.serialize();
 			var network = coinjs.getNetwork();
 
-			if(network.apiType === 'esplora'){
-				coinjs.ajax(network.apiBase+'/tx', function(response){
-					var body = (response || '').replace(/^\s+|\s+$/g, '').replace(/^"|"$/g, '');
-					if(/^[a-fA-F0-9]{64}$/.test(body)){
-						callback({
-							'success': true,
-							'txid': body,
-							'error': '',
-							'response': body,
-							'raw': body
-						});
-						return;
-					}
-					var errorMessage = body || 'Broadcast failed';
-					try {
-						var parsedErr = JSON.parse(body);
-						if(parsedErr && (parsedErr.error || parsedErr.message)){
-							errorMessage = parsedErr.error || parsedErr.message;
-						}
-					} catch (e) { /* plain text error from Esplora */ }
+			if(coinjs.explorer && coinjs.explorer.isSupported(network)){
+				coinjs.explorer.broadcast(network, tx).then(function(result){
 					callback({
-						'success': false,
-						'txid': '',
-						'error': errorMessage,
-						'response': errorMessage,
-						'raw': response
+						'success': !!result.success,
+						'txid': result.txid || '',
+						'error': result.error || '',
+						'response': result.error || result.txid || 'Unknown broadcast response',
+						'raw': result.raw
 					});
-				}, "POST", {'body': tx, 'contentType': 'text/plain'});
+				}, function(error){
+					var message = error || 'Broadcast failed';
+					callback({'success': false, 'txid': '', 'error': message, 'response': message});
+				});
 				return;
 			}
 
@@ -1703,7 +1826,7 @@
 		r.transactionHash = function(index, sigHashType) {
 
 			var clone = coinjs.clone(this);
-			var shType = sigHashType || 1;
+			var shType = this.normalizeSigHashType(sigHashType);
 
 			/* black out all other ins, except this one */
 			for (var i = 0; i < clone.ins.length; i++) {
@@ -1780,6 +1903,125 @@
 		}
 
 		/* generate a segwit transaction hash to sign from a transaction input */
+		/* Bitcoin Cash sighash: the BIP-143 preimage, committed with the
+		   fork-id hash type. Unlike transactionHashSegWitV0() this takes the
+		   value and scriptCode from the input itself rather than the
+		   coinb.in "value smuggled into the redeemscript" convention, because
+		   BCH applies it to ORDINARY P2PKH and P2SH inputs, not just witness
+		   ones. Returns null when the caller failed to supply an input value -
+		   never a wrong hash, which would silently produce an unspendable
+		   signature that only fails at broadcast. */
+		r.transactionHashForkId = function(index, sigHashType){
+			var input = this.ins[index];
+			if(!input) return null;
+			/* Whole base units only. A decimal amount (0.001 instead of 100000)
+			   would produce fractional preimage bytes and a hash no node
+			   computes - a signature that verifies locally and nowhere else. */
+			var value = input.value;
+			if(typeof value !== 'number' || !isFinite(value) || value < 0 || Math.floor(value) !== value) return null;
+			/* scriptCode, resolved the SAME way the legacy sighash resolves it:
+			   for an assembled multisig input the signed script is the redeem
+			   script, not the scriptSig that now sits in ins[index].script.
+			   Taking the raw buffer here silently hashes the wrong bytes once
+			   signatures have been applied, which is how a locally "valid"
+			   refund turns into one the network rejects. */
+			var extracted = this.extractScriptKey(index);
+			/* For an assembled MULTISIG input extractScriptKey returns the
+			   redeem script, which is the correct scriptCode. For a signed
+			   P2PKH or hodl input it returns the whole scriptSig, which is
+			   not - refuse rather than hash the wrong bytes. */
+			if(extracted && extracted['signed'] === 'true' && extracted['type'] != 'multisig') return null;
+			var scriptHex = extracted && extracted['script'];
+			var scriptCode = scriptHex ? Crypto.util.hexToBytes(scriptHex) : input.script.buffer.slice(0);
+			if(!scriptCode.length) return null;
+
+			function dsha(bytes){
+				return Crypto.SHA256(Crypto.SHA256(bytes, {asBytes: true}), {asBytes: true});
+			}
+			var base = sigHashType & 0x1f;
+			var anyoneCanPay = (sigHashType & 0x80) != 0;
+			var isNone = (base == 2), isSingle = (base == 3);
+			var zero = coinjs.numToBytes(0, 32);
+			var i, tmp;
+
+			tmp = [];
+			if(!anyoneCanPay){
+				for(i = 0; i < this.ins.length; i++){
+					tmp = tmp.concat(Crypto.util.hexToBytes(this.ins[i].outpoint.hash).reverse());
+					tmp = tmp.concat(coinjs.numToBytes(this.ins[i].outpoint.index, 4));
+				}
+			}
+			var hashPrevouts = tmp.length ? dsha(tmp) : zero;
+
+			tmp = [];
+			if(!anyoneCanPay && !isNone && !isSingle){
+				for(i = 0; i < this.ins.length; i++){
+					tmp = tmp.concat(coinjs.numToBytes(this.ins[i].sequence, 4));
+				}
+			}
+			var hashSequence = tmp.length ? dsha(tmp) : zero;
+
+			var hashOutputs = zero;
+			if(!isNone && !isSingle){
+				tmp = [];
+				for(i = 0; i < this.outs.length; i++){
+					tmp = tmp.concat(coinjs.numToBytes(this.outs[i].value, 8));
+					tmp = tmp.concat(coinjs.numToVarInt(this.outs[i].script.buffer.length));
+					tmp = tmp.concat(this.outs[i].script.buffer);
+				}
+				hashOutputs = tmp.length ? dsha(tmp) : zero;
+			} else if(isSingle && index < this.outs.length){
+				tmp = coinjs.numToBytes(this.outs[index].value, 8)
+					.concat(coinjs.numToVarInt(this.outs[index].script.buffer.length))
+					.concat(this.outs[index].script.buffer);
+				hashOutputs = dsha(tmp);
+			}
+
+			var buffer = [];
+			buffer = buffer.concat(coinjs.numToBytes(parseInt(this.version), 4));
+			buffer = buffer.concat(hashPrevouts);
+			buffer = buffer.concat(hashSequence);
+			buffer = buffer.concat(Crypto.util.hexToBytes(input.outpoint.hash).reverse());
+			buffer = buffer.concat(coinjs.numToBytes(input.outpoint.index, 4));
+			buffer = buffer.concat(coinjs.numToVarInt(scriptCode.length));
+			buffer = buffer.concat(scriptCode);
+			buffer = buffer.concat(coinjs.numToBytes(value, 8));
+			buffer = buffer.concat(coinjs.numToBytes(input.sequence, 4));
+			buffer = buffer.concat(hashOutputs);
+			buffer = buffer.concat(coinjs.numToBytes(this.lock_time, 4));
+			buffer = buffer.concat(coinjs.numToBytes(sigHashType, 4));
+			return Crypto.util.bytesToHex(dsha(buffer));
+		}
+
+		/* The single entry point every signing and verification path must use.
+		   Picks the fork-id preimage or the legacy one from the transaction's
+		   pinned rule, and THROWS rather than falling back: a silent fallback
+		   to the legacy algorithm on BCH produces a signature that is accepted
+		   locally and rejected by the network. */
+		/* A caller-supplied hash type (the Sign tab dropdown, a sig's own
+		   trailing byte) must never CLEAR a mandatory fork-id bit. Dropping it
+		   is worse than an error on BCH: BCH shares Bitcoin's version bytes, so
+		   a legacy-signed BCH transaction is a VALID BITCOIN signature for the
+		   same legacy address - a cross-chain replay hazard, not just a
+		   rejected broadcast. */
+		r.normalizeSigHashType = function(sigHashType){
+			var shType = sigHashType ? (sigHashType * 1) : this.sigHashType();
+			if(this.sigHashType() & coinjs.SIGHASH_FORKID) shType |= coinjs.SIGHASH_FORKID;
+			return shType;
+		}
+
+		r.transactionHashAny = function(index, sigHashType){
+			var shType = this.normalizeSigHashType(sigHashType);
+			if((shType & coinjs.SIGHASH_FORKID) != 0){
+				var forkHash = this.transactionHashForkId(index, shType);
+				if(!forkHash){
+					throw new Error('fork-id sighash requires the prevout value and scriptCode on input ' + index);
+				}
+				return forkHash;
+			}
+			return this.transactionHash(index, shType);
+		}
+
 		r.transactionHashSegWitV0 = function(index, sigHashType){
 			/* 
 			   Notice: coinb.in by default, deals with segwit transactions in a non-standard way.
@@ -1927,8 +2169,8 @@
 
 		/* generate a signature from a transaction hash */
 		r.transactionSig = function(index, wif, sigHashType, txhash){
-			var shType = sigHashType || 1;
-			var hash = txhash || Crypto.util.hexToBytes(this.transactionHash(index, shType));
+			var shType = this.normalizeSigHashType(sigHashType);
+			var hash = txhash || Crypto.util.hexToBytes(this.transactionHashAny(index, shType));
 
 			if(hash){
 				var key = coinjs.wif2privkey(wif);
@@ -2014,7 +2256,7 @@
 		/* sign a "standard" input */
 		r.signinput = function(index, wif, sigHashType){
 			var key = coinjs.wif2pubkey(wif);
-			var shType = sigHashType || 1;
+			var shType = this.normalizeSigHashType(sigHashType);
 			var signature = this.transactionSig(index, wif, shType);
 			var s = coinjs.script();
 			s.writeBytes(Crypto.util.hexToBytes(signature));
@@ -2025,7 +2267,7 @@
 
 		/* signs a time locked / hodl input */
 		r.signhodl = function(index, wif, sigHashType){
-			var shType = sigHashType || 1;
+			var shType = this.normalizeSigHashType(sigHashType);
 			var signature = this.transactionSig(index, wif, shType);
 			var redeemScript = this.ins[index].script.buffer
 			var s = coinjs.script();
@@ -2065,8 +2307,8 @@
 			var pubkeyList = scriptListPubkey(coinjs.script(redeemScript));
 			var sigsList = scriptListSigs(this.ins[index].script);
 
-			var shType = sigHashType || 1;
-			var sighash = Crypto.util.hexToBytes(this.transactionHash(index, shType));
+			var shType = this.normalizeSigHashType(sigHashType);
+			var sighash = Crypto.util.hexToBytes(this.transactionHashAny(index, shType));
 			var signature = Crypto.util.hexToBytes(this.transactionSig(index, wif, shType));
 
 			sigsList[coinjs.countObject(sigsList)+1] = signature;
@@ -2078,7 +2320,7 @@
 			for(x in pubkeyList){
 				for(y in sigsList){
 					this.ins[index].script.buffer = redeemScript;
-					sighash = Crypto.util.hexToBytes(this.transactionHash(index, sigsList[y].slice(-1)[0]*1));
+					sighash = Crypto.util.hexToBytes(this.transactionHashAny(index, sigsList[y].slice(-1)[0]*1));
 					if(coinjs.verifySignature(sighash, sigsList[y], pubkeyList[x])){
 						s.writeBytes(sigsList[y]);
 					}
@@ -2092,7 +2334,7 @@
 
 		/* sign segwit input */
 		r.signsegwit = function(index, wif, sigHashType){
-			var shType = sigHashType || 1;
+			var shType = this.normalizeSigHashType(sigHashType);
 
 			var wif2 = coinjs.wif2pubkey(wif);
 			var segwit = coinjs.segwitAddress(wif2['pubkey']);
@@ -2159,7 +2401,7 @@
 
 		/* sign inputs */
 		r.sign = function(wif, sigHashType){
-			var shType = sigHashType || 1;
+			var shType = this.normalizeSigHashType(sigHashType);
 			for (var i = 0; i < this.ins.length; i++) {
 				var d = this.extractScriptKey(i);
 
@@ -2234,6 +2476,12 @@
 			if (typeof buffer == "string") {
 				buffer = Crypto.util.hexToBytes(buffer)
 			}
+			/* Serialised bytes carry neither the fork-id rule nor the prevout
+			   values, so a round-tripped transaction would sign with whatever
+			   the ambient network happens to be. Pin the rule from the active
+			   network; the missing values then make signing THROW rather than
+			   emit a legacy signature the chain rejects. */
+			r.forkId = coinjs.usesForkId();
 
 			var pos = 0;
 			var witness = false;

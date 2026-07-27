@@ -15,6 +15,7 @@
 			priv: 0x4e,
 			multisig: 0x4b,
 			bech32Hrp: 'rod',
+			segwit: true,
 			decimals: 8
 		},
 		LTC: {
@@ -23,8 +24,187 @@
 			priv: 0xb0,
 			multisig: 0x32,
 			bech32Hrp: 'ltc',
+			segwit: true,
+			decimals: 8
+		},
+		/* Dogecoin mainnet — dogecoin/dogecoin src/chainparams.cpp.
+		   SegWit is permanently disabled (DEPLOYMENT_SEGWIT.nTimeout = 0 and
+		   IsWitnessEnabled() hard-returns false); Dogecoin Core contains no
+		   bech32 implementation at all, so there is no HRP. */
+		DOGE: {
+			code: 'DOGE',
+			pub: 0x1e,
+			priv: 0x9e,
+			multisig: 0x16,
+			bech32Hrp: '',
+			segwit: false,
+			decimals: 8
+		},
+		/* Bitcoin mainnet — bitcoin/bitcoin src/chainparams.cpp. */
+		BTC: {
+			code: 'BTC',
+			pub: 0x00,
+			priv: 0x80,
+			multisig: 0x05,
+			bech32Hrp: 'bc',
+			segwit: true,
+			decimals: 8
+		},
+		/* Bitcoin Cash mainnet — retains Bitcoin's original version bytes.
+		   SegWit was never activated; BCH uses CashAddr (not bech32), but
+		   this wallet uses only legacy base58 addresses. */
+		BCH: {
+			code: 'BCH',
+			pub: 0x00,
+			priv: 0x80,
+			multisig: 0x05,
+			bech32Hrp: '',
+			segwit: false,
 			decimals: 8
 		}
+	};
+
+	/* ------------------------------------------------------------------
+	   Per-chain relay / mining policy.
+
+	   All values are in the chain's base unit (satoshi for ROD and LTC, koinu
+	   for DOGE — both 1e-8 of a coin, so the arithmetic stays uniform).
+
+	     feeRatePerByte       rate used to CONSTRUCT transactions
+	     relayFloorPerByte    absolute minimum a node relays; used to VALIDATE
+	     hardDustSats         an output below this makes the tx non-standard
+	     softDustSats         legal but attracts a per-output surcharge (DOGE)
+	     dustSurchargeSats    the surcharge added per soft-dust output
+	     changeThresholdSats  change below this is dropped into the fee
+	     blockSeconds         target spacing, to convert a wall-clock refund
+	                          timeout into a block count
+
+	   Dogecoin's values come from src/policy/policy.h, src/validation.h and
+	   src/dogecoin-fees.cpp at v1.14.6+:
+	     RECOMMENDED_MIN_TX_FEE   = COIN/100 = 0.01  DOGE/kB = 1000 koinu/B
+	     DEFAULT_MIN_RELAY_TX_FEE = REC/10   = 0.001 DOGE/kB =  100 koinu/B
+	     DEFAULT_BLOCK_MIN_TX_FEE = REC      = 0.01  DOGE/kB
+	     DEFAULT_HARD_DUST_LIMIT  = 100000 koinu  (0.001 DOGE)
+	     DEFAULT_DUST_LIMIT(soft) = 1000000 koinu (0.01 DOGE)
+
+	   We CONSTRUCT at the block-min rate (1000 koinu/B) rather than the relay
+	   floor: a transaction paying only the floor still propagates, but every
+	   miner running the default -blockmintxfee skips it, so it can sit
+	   unconfirmed past a swap's refund deadline — which is a fund-loss risk,
+	   not merely a delay.
+
+	   Unlike Bitcoin, Dogecoin dust is an ABSOLUTE amount — see
+	   CTxOut::IsDust(dustLimit) in src/primitives/transaction.h. It is not
+	   derived from a fee rate, so it cannot be paid away by bidding higher.
+
+	   ROD keeps feeRatePerByte 0, meaning "use the caller-supplied fee
+	   verbatim". The ROD default term fees already clear its ~232 sat/B
+	   mainnet relay floor, and 0 preserves existing ROD behaviour exactly. */
+	chainsModule.policy = {
+		ROD: {
+			feeRatePerByte: 0,
+			relayFloorPerByte: 0,
+			hardDustSats: 546,
+			softDustSats: 0,
+			dustSurchargeSats: 0,
+			changeThresholdSats: 546,
+			blockSeconds: 30
+		},
+		LTC: {
+			feeRatePerByte: 2,
+			relayFloorPerByte: 1,
+			hardDustSats: 546,
+			softDustSats: 0,
+			dustSurchargeSats: 0,
+			changeThresholdSats: 546,
+			blockSeconds: 150
+		},
+		DOGE: {
+			feeRatePerByte: 1000,
+			relayFloorPerByte: 100,
+			hardDustSats: 100000,
+			softDustSats: 1000000,
+			dustSurchargeSats: 1000000,
+			/* Dogecoin Core 1.14.6 wallet: smallest useful change is
+			   discardThreshold + 2 * minTxFee(1000 bytes) = 0.03 DOGE. */
+			changeThresholdSats: 3000000,
+			blockSeconds: 60
+		},
+		/* Bitcoin mainnet. DEFAULT_MIN_RELAY_TX_FEE = 1000 sat/kB = 1 sat/byte.
+		   Dust limit is 546 sats (3 × minRelayTxFee × size-of-spend). We
+		   construct at 2 sat/byte for reliable confirmation, since time-critical
+		   claim transactions must not sit unconfirmed past the refund deadline. */
+		BTC: {
+			feeRatePerByte: 2,
+			relayFloorPerByte: 1,
+			hardDustSats: 546,
+			softDustSats: 0,
+			dustSurchargeSats: 0,
+			changeThresholdSats: 546,
+			blockSeconds: 600
+		},
+		/* Bitcoin Cash mainnet. DEFAULT_MIN_RELAY_TX_FEE = 1000 sat/kB = 1 sat/byte.
+		   Same dust policy as BTC (546 sats). BCH has consistently low fees. */
+		BCH: {
+			feeRatePerByte: 2,
+			relayFloorPerByte: 1,
+			hardDustSats: 546,
+			softDustSats: 0,
+			dustSurchargeSats: 0,
+			changeThresholdSats: 546,
+			blockSeconds: 600
+		}
+	};
+
+	/* Throws rather than defaulting. Falling back to ROD's policy would mean a
+	   newly registered chain silently inherits "no fee floor, 546-unit dust",
+	   turning every relay and dust check below into a no-op — the exact failure
+	   the policy table exists to prevent. */
+	chainsModule.getPolicy = function(chainCode){
+		var policy = chainsModule.policy[chainCode];
+		if(!policy){
+			throw new Error('No relay policy registered for chain: ' + chainCode);
+		}
+		return policy;
+	};
+
+	/* Smallest output worth creating on a chain. Above the hard dust limit an
+	   output is merely legal; above the SOFT limit it is also free of the flat
+	   per-output surcharge Dogecoin adds to the relay minimum. Settlement fees
+	   are canonical and fixed, so an output between the two limits can make the
+	   required fee exceed the fee the terms already committed to — the swap
+	   would then be unsignable. Gate swap creation on this, not on hard dust. */
+	chainsModule.minEconomicalOutputSats = function(chainCode){
+		var policy = chainsModule.getPolicy(chainCode);
+		return Math.max(policy.hardDustSats, policy.softDustSats);
+	};
+
+	/* Minimum fee a node accepts for a transaction of the given size with the
+	   given output values, in base units. Mirrors GetDogecoinMinRelayFee(): a
+	   size-proportional component plus a flat surcharge per soft-dust output.
+	   Returns 0 for chains with no configured floor (ROD). */
+	chainsModule.minRelayFeeSats = function(chainCode, sizeBytes, outputValuesSats){
+		var policy = chainsModule.getPolicy(chainCode);
+		var fee = Math.ceil((parseInt(sizeBytes, 10) || 0) * policy.relayFloorPerByte);
+		if(policy.dustSurchargeSats > 0 && outputValuesSats && outputValuesSats.length){
+			for(var index = 0; index < outputValuesSats.length; index++){
+				if(outputValuesSats[index] < policy.softDustSats){
+					fee += policy.dustSurchargeSats;
+				}
+			}
+		}
+		return fee;
+	};
+
+	/* An output below the hard dust limit makes the whole transaction
+	   non-standard, so it can never relay. Checked before every broadcast. */
+	chainsModule.isHardDust = function(chainCode, valueSats){
+		return (parseInt(valueSats, 10) || 0) < chainsModule.getPolicy(chainCode).hardDustSats;
+	};
+
+	chainsModule.supportsSegwit = function(chainCode){
+		var definition = chainsModule.definitions[chainCode];
+		return !!definition && definition.segwit !== false;
 	};
 
 	function getDefinition(chainCode){
@@ -110,6 +290,12 @@
 		var chainDefinition = getDefinition(chainCode);
 		var normalizedType = addressType || 'legacy';
 		if(normalizedType === 'bech32'){
+			/* Dogecoin has no SegWit and no bech32 — a "doge1…" address would
+			   encode cleanly here but nothing on mainnet would ever accept it,
+			   so fail loudly rather than hand back unspendable funds. */
+			if(chainDefinition.segwit === false){
+				throw new Error(chainCode + ' does not support bech32/SegWit addresses');
+			}
 			return bech32Address(chainDefinition, publicKeyHex);
 		}
 		return base58WithVersion(chainDefinition.pub, hash160(publicKeyHex));
@@ -170,13 +356,99 @@
 		var expectedRodAddress = coinjs.pubkey2address(fixturePublicKey);
 		var beforeGlobals = JSON.stringify({pub: coinjs.pub, priv: coinjs.priv, multisig: coinjs.multisig, hrp: coinjs.bech32.hrp});
 		var ltcAddress = chainsModule.publicKeyToAddress('LTC', fixturePublicKey, 'legacy');
+		var dogeAddress = chainsModule.publicKeyToAddress('DOGE', fixturePublicKey, 'legacy');
+		var btcAddress = chainsModule.publicKeyToAddress('BTC', fixturePublicKey, 'legacy');
+		var bchAddress = chainsModule.publicKeyToAddress('BCH', fixturePublicKey, 'legacy');
 		var afterGlobals = JSON.stringify({pub: coinjs.pub, priv: coinjs.priv, multisig: coinjs.multisig, hrp: coinjs.bech32.hrp});
+
+		/* Dogecoin vectors generated independently with bitcoinjs-lib +
+		   @noble/curves against dogecoin/dogecoin chainparams (pubKeyHash 0x1e,
+		   scriptHash 0x16) from the well-known secp256k1 scalars 1 and 2. If
+		   these ever stop matching, the DOGE version bytes have drifted and
+		   every DOGE address the wallet produces would be unspendable. */
+		var vectorKey1 = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+		var vectorKey2 = '02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5';
+		var vectorP2pkh = chainsModule.publicKeyToAddress('DOGE', vectorKey1, 'legacy');
+		var vectorMultisig = chainsModule.publicKeysToMultisig('DOGE', [vectorKey1, vectorKey2], 2);
+		var vectorsMatch = vectorP2pkh === 'DFpN6QqFfUm3gKNaxN6tNcab1FArL9cZLE'
+			&& vectorMultisig.address === '9tAfWptDmGyYyFjKKr5VpApUKzq9hFpBJ1'
+			&& vectorMultisig.redeemScript === '52210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817982102c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee552ae';
+
+		/* Bitcoin vectors: the well-known generator-point pubkey produces the
+		   canonical "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH" P2PKH address. BTC and
+		   BCH share the same version bytes (pub 0x00, multisig 0x05), so their
+		   legacy addresses are byte-identical — the protocol is still safe
+		   because altChain is part of the hashed canonical terms. */
+		var btcP2pkh = chainsModule.publicKeyToAddress('BTC', vectorKey1, 'legacy');
+		var btcMultisig = chainsModule.publicKeysToMultisig('BTC', [vectorKey1, vectorKey2], 2);
+		var bchP2pkh = chainsModule.publicKeyToAddress('BCH', vectorKey1, 'legacy');
+		var bchMultisig = chainsModule.publicKeysToMultisig('BCH', [vectorKey1, vectorKey2], 2);
+		var btcVectorsMatch = btcP2pkh === '1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH'
+			&& btcMultisig.address === '33RQmypKhD6f4tMquiR5a3C6dRT7eBpaiG'
+			&& btcMultisig.redeemScript === '52210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817982102c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee552ae';
+		/* BCH legacy addresses are byte-identical to BTC (same version bytes) */
+		var bchVectorsMatch = bchP2pkh === btcP2pkh && bchMultisig.address === btcMultisig.address;
+
+		/* Dogecoin has no SegWit, so requesting a bech32 address must fail
+		   rather than silently mint an address no node will ever accept. */
+		var dogeBech32Rejected = false;
+		try {
+			chainsModule.publicKeyToAddress('DOGE', fixturePublicKey, 'bech32');
+		} catch(bech32Error){
+			dogeBech32Rejected = true;
+		}
+
+		/* BCH has no SegWit either — bech32 must be refused */
+		var bchBech32Rejected = false;
+		try {
+			chainsModule.publicKeyToAddress('BCH', fixturePublicKey, 'bech32');
+		} catch(bchBech32Error){
+			bchBech32Rejected = true;
+		}
+
+		/* BTC DOES support bech32 — must succeed */
+		var btcBech32Works = false;
+		try {
+			var btcBech32Addr = chainsModule.publicKeyToAddress('BTC', vectorKey1, 'bech32');
+			btcBech32Works = btcBech32Addr.indexOf('bc1') === 0;
+		} catch(btcBech32Error){
+			btcBech32Works = false;
+		}
+
+		var policySane = chainsModule.getPolicy('DOGE').hardDustSats === 100000
+			&& chainsModule.minRelayFeeSats('DOGE', 300, [50000000]) === 30000
+			/* one soft-dust output adds exactly one 0.01 DOGE surcharge */
+			&& chainsModule.minRelayFeeSats('DOGE', 300, [500000]) === 1030000
+			&& chainsModule.minRelayFeeSats('LTC', 300, [500000]) === 300
+			/* BTC and BCH: simple fee-rate policy, no surcharges */
+			&& chainsModule.getPolicy('BTC').hardDustSats === 546
+			&& chainsModule.getPolicy('BCH').hardDustSats === 546
+			&& chainsModule.minRelayFeeSats('BTC', 300, [500000]) === 300
+			&& chainsModule.minRelayFeeSats('BCH', 300, [500000]) === 300;
+
 		return {
 			name: 'Immutable chain helpers',
-			passed: rodAddress === expectedRodAddress && beforeGlobals === afterGlobals && ltcAddress !== rodAddress,
+			passed: rodAddress === expectedRodAddress && beforeGlobals === afterGlobals
+				&& ltcAddress !== rodAddress && dogeAddress !== rodAddress && dogeAddress !== ltcAddress
+				&& dogeAddress.charAt(0) === 'D'
+				&& btcAddress.charAt(0) === '1' && bchAddress.charAt(0) === '1'
+				&& btcAddress === bchAddress
+				&& vectorsMatch && dogeBech32Rejected && policySane
+				&& btcVectorsMatch && bchVectorsMatch
+				&& bchBech32Rejected && btcBech32Works,
 			rodAddress: rodAddress,
 			expectedRodAddress: expectedRodAddress,
 			ltcAddress: ltcAddress,
+			dogeAddress: dogeAddress,
+			btcAddress: btcAddress,
+			bchAddress: bchAddress,
+			dogeVectorsMatch: vectorsMatch,
+			btcVectorsMatch: btcVectorsMatch,
+			bchVectorsMatch: bchVectorsMatch,
+			dogeBech32Rejected: dogeBech32Rejected,
+			bchBech32Rejected: bchBech32Rejected,
+			btcBech32Works: btcBech32Works,
+			dogePolicySane: policySane,
 			globalsStable: beforeGlobals === afterGlobals
 		};
 	};

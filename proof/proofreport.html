@@ -1,0 +1,2814 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ROD atomic swap — full proof matrix (LTC · DOGE · BTC · BCH)</title>
+<style>
+  :root { --bg:#0f1419; --panel:#161c23; --line:#243040; --ink:#dbe4ee; --dim:#8ba0b8;
+          --ok:#4ade80; --no:#f87171;
+          --doge:#c9a227; --ltc:#4b8fd6; --btc:#f7931a; --bch:#8dc351; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1100px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:26px; margin:0 0 6px; letter-spacing:-.01em; }
+  .sub { color:var(--dim); margin:0 0 28px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:32px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .card .n { font-size:24px; font-weight:650; }
+  .card .l { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+  .card.good .n { color:var(--ok); }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+            padding:18px 20px; margin-bottom:18px; }
+  h3 { margin:0 0 4px; font-size:16px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .chain { font-weight:700; }
+  .chain.doge { color:var(--doge); } .chain.ltc { color:var(--ltc); }
+  .chain.btc  { color:var(--btc);  } .chain.bch  { color:var(--bch);  }
+  .pill { margin-left:auto; font-size:12px; padding:3px 9px; border-radius:999px; }
+  .pill.pass { background:rgba(74,222,128,.14); color:var(--ok); }
+  .pill.fail { background:rgba(248,113,113,.14); color:var(--no); }
+  .meta { color:var(--dim); font-size:12px; margin:0 0 12px; }
+  ol.checks { list-style:none; margin:0; padding:0; }
+  ol.checks li { display:grid; grid-template-columns:18px 1fr; gap:8px; padding:5px 0;
+                 border-top:1px solid rgba(255,255,255,.04); }
+  ol.checks li:first-child { border-top:0; }
+  .mark { color:var(--ok); font-weight:700; }
+  li.no .mark { color:var(--no); }
+  .what { font-size:13.5px; }
+  .detail { grid-column:2; color:var(--dim); font-size:11.5px;
+            font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-word; }
+  details { margin-top:12px; }
+  summary { cursor:pointer; color:var(--dim); font-size:13px; }
+  table { width:100%; border-collapse:collapse; margin-top:10px; }
+  th,td { text-align:left; padding:6px 8px; border-top:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  tr.bad td { color:var(--no); }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .small { font-size:11.5px; } .tiny { font-size:10.5px; color:var(--dim); }
+  .wrap-anywhere, .wrap { overflow-wrap:anywhere; }
+  td.wrap { overflow-wrap:anywhere; }
+  .tag { font-size:10px; padding:2px 6px; border-radius:4px; background:rgba(255,255,255,.06); }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; color:var(--dim); }
+  .note { color:var(--dim); font-size:12.5px; margin-top:26px; border-top:1px solid var(--line); padding-top:16px; }
+</style></head>
+<body><div class="wrap">
+  <h1>ROD atomic swap — full proof matrix</h1>
+  <p class="sub">Generated from harness runs of the unmodified wallet in headless Chromium.
+     Every broadcast below was re-parsed with bitcoinjs-lib, the correct sighash recomputed
+     (legacy for LTC / DOGE / BTC; BIP-143 fork-id for BCH), and each signature re-verified
+     with noble secp256k1 — independently of the wallet's own code.</p>
+
+  <div class="cards">
+    <div class="card good"><div class="n">408/408</div><div class="l">checks passed</div></div>
+    <div class="card"><div class="n">16</div><div class="l">scenarios</div></div>
+    <div class="card"><div class="n">52</div><div class="l">validated broadcasts</div></div>
+    <div class="card"><div class="n">4</div><div class="l">counter chains</div></div>
+  </div>
+
+  
+  <section>
+    <h3>
+      <span class="chain ltc">ROD ↔ LTC</span>
+      happy
+      <span class="pill pass">29/29 checks</span>
+    </h3>
+    <p class="meta">swapId <code>09561c3d37c93637ea9261c9d9840bf6fb12a19d9f9333f27782fa5d16a1ee4a</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 09561c3d37c93637…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500040,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RMHZrTyy5s6UDYYhX6JoGreemq4gwpmpHj","buyerAltRefundAddress":"LYFg7SjPBn9gbvwaddkYUB4aUSqJCuchkC","nonce":"9145ed4528c2362df3c6c40971dcb17c"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, LTC refund locks at 500040</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 02bac627f433ce48…) | fee 53000 sats over 223 bytes (237.67 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding txid equals PLANNED txid (refunds/adaptor sigs bind to it)</span>
+          <span class="detail">df56541bc72b2ef9… vs planned df56541bc72b2ef9…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">timeline: PREPARED precedes ROD funding broadcast</span>
+          <span class="detail">OPEN → NEGOTIATING → BILATERAL_READY → TERMS_ACCEPTED → REFUNDS_READY → SIGNATURES_EXCHANGED → PREPARED → ALICE_ROD_FUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC funding tx broadcast &amp; independently validated (0.05000000 LTC)</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 03b2799dfa980f76…) | fee 1000 sats over 224 bytes (4.46 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 1000 sats over 304 bytes (3.29 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">recovered secret verifies against adaptor point (yG == Y)</span>
+          <span class="detail">state SECRET_RECOVERED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 303 bytes (234.32 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session COMPLETE</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session COMPLETE</span>
+          <span class="detail">COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice received LTC at her payout address</span>
+          <span class="detail">4999000 sats at LZC77nmb6kLs2CsKdsXLirwtuVXfELivtM</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob received ROD at his payout address</span>
+          <span class="detail">9999929000 sats at RDG72y2WP9kPYGdK2756eicaq1J6gFAYw5</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero normal-signature messages on relay (settlement fully adaptor-based)</span>
+          <span class="detail">message types seen: swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (LTC)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>4 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">df56541bc72b2ef9aec1ed656f44c577cccffadce809864114a82962d903e3cf</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 02bac627f433ce48…)</div><div>fee 53000 sats over 223 bytes (237.67 sat/B)</div></td>
+      <td class="mono tiny wrap">01000000014eb47f2dcbb7850a7a000118b8e03411176f236796a2f8692fdd131bbcc8ca1b000000006a4730440220198a79c5216a917c75609cf28b249c5ae65d1b19f305ffa234d8b9320e23a60502…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">73d0820cc76841620457b0ae5ac6e21d71f75efb43ff1d587bb4ac83a549207a</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 303 bytes (234.32 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001cfe303d96229a814418609e8dcfacfcc77c5446f65edc1aef92e2bc71b5456df00000000da0047304402205645ee786a0b30b89b6f4cc7aeed91d26b76d0eeb3e9e7a4c775c53797483d10…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">LTC</span></td>
+      <td class="mono small">462bb5232caf019c21f889dc71f508b608bfb68a076564a244baee20ca4d4de2</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 03b2799dfa980f76…)</div><div>fee 1000 sats over 224 bytes (4.46 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000128f73b82a2855c22a9ea9a3e3b9d3e511fbc7710dc469785d5cce8c87509ee29000000006b483045022100d89945906d4b784c668b4134fae5fc0864542d0b7833f458fe5c957094e05590…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">LTC</span></td>
+      <td class="mono small">7f82d36610223d57bfe609ed12d0080f877c1374a12b93f0acdd37e3d4674dce</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 1000 sats over 304 bytes (3.29 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001e24d4dca20eeba44a26465078ab6bf08b608f571dc89f8219c01af2c23b52b4600000000db00483045022100e9cc519a7e17dfad6b6e0091db6f771ba44cfae986679cf68166bfe48d7370…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain ltc">ROD ↔ LTC</span>
+      refund
+      <span class="pill pass">21/21 checks</span>
+    </h3>
+    <p class="meta">swapId <code>935a497f04c15c2f459c81fd546c5500ce34458add7e1768ea2cf4f7e2d93a57</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 935a497f04c15c2f…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500040,"rodConfirmations":3,"altConfirmations":1,"sellerRodRefundAddress":"RYLBnHNNDpSw2LkFLDE2ijqirTSPvGw9qT","buyerAltRefundAddress":"LX6YqQ6Bh8SDak39PNujPRavtj9BYk7prt","nonce":"b6e7b3d6cc8fb0cbfe16f5d97c28df9e"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, LTC refund locks at 500040</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 030ac06e24a44e53…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">confirmation gate held: Bob did NOT fund LTC at 1/3 confirmations</span>
+          <span class="detail">alt broadcasts: 0</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob disappeared (context closed) after ROD funding</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund broadcast &amp; independently validated (locktime + 2-of-2 sigs)</span>
+          <span class="detail">locktime 500030 satisfied at height 500035 | input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 303 bytes (234.32 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session reached refund state</span>
+          <span class="detail">REFUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">funds returned to Alice refund address (amount minus refund fee)</span>
+          <span class="detail">9999929000 sats at RYLBnHNNDpSw2LkFLDE2ijqirTSPvGw9qT</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept by refund</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero LTC broadcasts at all (Bob never funded)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>2 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">22c73e02b273a4715c226bbaed55f57dd64ea7c8866ba853b97ec09d4e1e2ed1</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 030ac06e24a44e53…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000194f24ee965d369c2fac01a0074a843ba7370ebdcb15ab1dc55f32aa3badea197000000006b483045022100d6839cbd6e2631eb879ed75e0cdab50e69971f7cd1aef740c32b9fe290a4c2e8…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">70938bf5c01ec63326d8fa88acbed0264fd8cfddef5091b3c048622727659d3d</td>
+      <td class="small"><div>locktime 500030 satisfied at height 500035</div><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 303 bytes (234.32 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001d12e1e4e9dc07eb953a86b86c8a74ed67df555edba6b225c71a473b2023ec72200000000da0047304402201915bf9e0af68d1954c30cedcc05edfad8545d86949d530c6f8371fd1ef86019…</td>
+    </tr>
+          
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_alt_refund_signature, swap_rod_funding_planned, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_rod_refund_broadcast, swap_refunded</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain ltc">ROD ↔ LTC</span>
+      altrefund
+      <span class="pill pass">22/22 checks</span>
+    </h3>
+    <p class="meta">swapId <code>563960caaa3681b3d2e66237d08102be74efb42bfe80c134d84986018c31a131</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 563960caaa3681b3…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500040,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RRFyLdnjnNUVoEhgKTgx1sHbFTAa9hDFMN","buyerAltRefundAddress":"LN7siDBpGqfJ1i1DQChfen46JYbyCVhQYv","nonce":"5ec8bbd0521249fc359ea9ddf521668d"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, LTC refund locks at 500040</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 033507a5c1125dba…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 03411375d0713f4f…) | fee 1000 sats over 224 bytes (4.46 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed LTC refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500040 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice disappeared (context closed) without claiming</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed LTC refund broadcast &amp; independently validated (locktime + 2-of-2 sigs + LTC policy)</span>
+          <span class="detail">locktime 500040 satisfied at height 500045 | input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 1000 sats over 303 bytes (3.30 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session reached a refund state</span>
+          <span class="detail">ALT_REFUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC returned to Bob's refund address (amount minus refund fee)</span>
+          <span class="detail">4999000 vs expected 4999000 at LN7siDBpGqfJ1i1DQChfen46JYbyCVhQYv</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC multisig fully swept by refund</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (LTC)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice never claimed: no secret was ever revealed on the alt chain</span>
+          <span class="detail">2 alt broadcasts (funding + refund only)</span>
+        </li>
+    </ol>
+    <details>
+      <summary>3 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">076f009d9c2f608fc332d652cd8bf64d0ee0b61e8d83117232266049955d170a</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 033507a5c1125dba…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000124ea1d76c46ab1496f75fc5d5585f9df77622fd7ad82dd727f308076a15939be000000006b483045022100855aebd063d42867b024c021d7fb31930ad97e43a91de3ea9f7e85769dc2465a…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">LTC</span></td>
+      <td class="mono small">d7947df9660ef644a17121d88743a5caa01124b3de1970b6f2b0e2c72f0cc6f4</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 03411375d0713f4f…)</div><div>fee 1000 sats over 224 bytes (4.46 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001af80ae517b3a3054456186d75a2b69a5d49c89a1f70d664c0effd2a0a7b9c3c4000000006b483045022100c9dac1cc3f29fd2fa2cc852455ee41c3173dc5602eafda66b89e4c734e2db57c…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">LTC</span></td>
+      <td class="mono small">ca7cb3e29f75df9d69530df22c765c1f6f2b681ed13e8f32a9988296df10dbe5</td>
+      <td class="small"><div>locktime 500040 satisfied at height 500045</div><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 1000 sats over 303 bytes (3.30 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001f4c60c2fc7e2b0f2b67019deb32411a0caa54387d82171a144f60e66f97d94d700000000da0047304402204e2ef69c653183ebc0eaeacd6398bc35667640e73ad10f8e480d470aa3a54bfd…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_refund_broadcast</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain doge">ROD ↔ DOGE</span>
+      happy
+      <span class="pill pass">29/29 checks</span>
+    </h3>
+    <p class="meta">swapId <code>0c2accc3998de9fbc25cc528da45b666b371b4f4d84fa2b0fb48e6d28d49be78</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 0c2accc3998de9fb…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500060,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RQNV9et9w1Z1UTtBizoFbQnGgvf6qNzeTj","buyerAltRefundAddress":"DRQnFz7RAeW8pUtULHkgdWU6xjiHpzzQue","nonce":"ce37617d0291551bceb6386c8a716bfc"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, DOGE refund locks at 500060</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 029848245aab17d0…) | fee 53000 sats over 223 bytes (237.67 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding txid equals PLANNED txid (refunds/adaptor sigs bind to it)</span>
+          <span class="detail">cd4f092fe3a3ce76… vs planned cd4f092fe3a3ce76…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">timeline: PREPARED precedes ROD funding broadcast</span>
+          <span class="detail">OPEN → NEGOTIATING → BILATERAL_READY → TERMS_ACCEPTED → REFUNDS_READY → SIGNATURES_EXCHANGED → PREPARED → ALICE_ROD_FUNDED → BOB_ALT_FUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE funding tx broadcast &amp; independently validated (500.00000000 DOGE)</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 02db56f027e03763…) | fee clears -blockmintxfee (223000) — miners with default policy would include it | fee 1000000 sats over 223 bytes (4484.30 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee clears -blockmintxfee (303000) — miners with default policy would include it | fee 1000000 sats over 303 bytes (3300.33 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">recovered secret verifies against adaptor point (yG == Y)</span>
+          <span class="detail">state COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 303 bytes (234.32 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session COMPLETE</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session COMPLETE</span>
+          <span class="detail">COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice received DOGE at her payout address</span>
+          <span class="detail">49999000000 sats at D6SyR4LtKKou1nDXwJsSFqG8QsVW1BckPS</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob received ROD at his payout address</span>
+          <span class="detail">9999929000 sats at RTA6KFbepTC2G7rYTA8mrDbhzS6Bt7UzmK</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero normal-signature messages on relay (settlement fully adaptor-based)</span>
+          <span class="detail">message types seen: swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (DOGE)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>4 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">cd4f092fe3a3ce76d03e53fa7f2d809944c83b1f17be7a0ad90a453b5bfd7ca8</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 029848245aab17d0…)</div><div>fee 53000 sats over 223 bytes (237.67 sat/B)</div></td>
+      <td class="mono tiny wrap">01000000011210cc8ff4659acafb339d399fea1112304d4380ebf9f0fb3d3e121bb30551ff000000006a47304402202d6d90e50d027fb0653590fcaea9bf5801bfa30317466940a305d5ffdcec036b02…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">03355afa5b001449faf5e3085ae26f877ef8b096963cf4f39d2cd40d10c90a4b</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 303 bytes (234.32 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001a87cfd5b3b450ad90a7abe171f3bc84499802d7ffa533ed076cea3e32f094fcd00000000da0047304402202410ee2f189e872f5d70234cfe32e20dad71396d3c6b4065a10c3cf5116b86ac…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">DOGE</span></td>
+      <td class="mono small">23eb93b82f4b18fd1acc3d66733d8c1b4d8b13e063346abaf0c540687f333618</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 02db56f027e03763…)</div><div>fee clears -blockmintxfee (223000) — miners with default policy would include it</div><div>fee 1000000 sats over 223 bytes (4484.30 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001cc3e438d7c34158cddf76411cb2d57108e7f738ea003c320b5c3963b2764004d000000006a473044022069b3ff07531a2e609619d8bc3b2725e0cd0885b441b56248464dffddbcc3b26b02…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">DOGE</span></td>
+      <td class="mono small">8f4d8dc8dc64e82c1641400811abed14975d7b19a89370f2cdcbfe706ddf0add</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee clears -blockmintxfee (303000) — miners with default policy would include it</div><div>fee 1000000 sats over 303 bytes (3300.33 sat/B)</div></td>
+      <td class="mono tiny wrap">01000000011836337f6840c5f0ba6a3463e0138b4d1b8c3d73663dcc1afd184b2fb893eb2300000000da00483045022100e0e2295f3fcf1268d4a6e0f19b8a642fea9bfd771cdba34fe58cd2654276c4…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain doge">ROD ↔ DOGE</span>
+      refund
+      <span class="pill pass">21/21 checks</span>
+    </h3>
+    <p class="meta">swapId <code>32de2a3401f324c4d7ae92d87491325998e1f0fabf77263653a95968e30e3cc4</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 32de2a3401f324c4…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500060,"rodConfirmations":3,"altConfirmations":1,"sellerRodRefundAddress":"RLzMga569MdmPyF6C3CiGNpzaTwKqxb8Kw","buyerAltRefundAddress":"DSfwwbjE8hA76gXNso3yEGLGeA9p1XuiCi","nonce":"2d0eb3e51027e63e88817f27ba327bc4"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, DOGE refund locks at 500060</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 03ac4284998bf9f2…) | fee 53000 sats over 223 bytes (237.67 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">confirmation gate held: Bob did NOT fund DOGE at 1/3 confirmations</span>
+          <span class="detail">alt broadcasts: 0</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob disappeared (context closed) after ROD funding</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund broadcast &amp; independently validated (locktime + 2-of-2 sigs)</span>
+          <span class="detail">locktime 500030 satisfied at height 500035 | input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 303 bytes (234.32 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session reached refund state</span>
+          <span class="detail">REFUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">funds returned to Alice refund address (amount minus refund fee)</span>
+          <span class="detail">9999929000 sats at RLzMga569MdmPyF6C3CiGNpzaTwKqxb8Kw</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept by refund</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero DOGE broadcasts at all (Bob never funded)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>2 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">2bb82f0147df5cc10ee0e72beda1a4c22c832901763c37c626458af41403f3bc</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 03ac4284998bf9f2…)</div><div>fee 53000 sats over 223 bytes (237.67 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000151aa2085a1f7f0b601d352d53854e8b115de86c2d143fa906bf59255c5a40d2e000000006a473044022054dcefda1f938e6e3c044e0af6a28ca813772e12351226de7364bc53d0b88a5002…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">9652b97f72824dc13de69b94140ad001156e6d1bd7d2ef178565a0dac0b2802d</td>
+      <td class="small"><div>locktime 500030 satisfied at height 500035</div><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 303 bytes (234.32 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001bcf30314f48a4526c6373c760129832cc2a4a1ed2be7e00ec15cdf47012fb82b00000000da00483045022100a94cadf340d4af217bfc9492287c68dceedfa6c77cb00f85381f1cb8e6127c…</td>
+    </tr>
+          
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_rod_refund_broadcast, swap_refunded</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain doge">ROD ↔ DOGE</span>
+      altrefund
+      <span class="pill pass">22/22 checks</span>
+    </h3>
+    <p class="meta">swapId <code>e8df60d6dbb2db0cc5cc7324313664b11adc70c307cf989ccd31f1ae9eb37834</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId e8df60d6dbb2db0c…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500060,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RB6UaR6GNmUo6tojT3p4Jtmhtrrhk9BYqg","buyerAltRefundAddress":"D933ZqCgV52una9nQMYSt1CgGVZh1CEX6R","nonce":"4ff84c2ab9063998e6f108c9408605e3"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, DOGE refund locks at 500060</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 03c375c2a459389c…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 02da10179b9489bb…) | fee clears -blockmintxfee (224000) — miners with default policy would include it | fee 1000000 sats over 224 bytes (4464.29 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed DOGE refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500060 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice disappeared (context closed) without claiming</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed DOGE refund broadcast &amp; independently validated (locktime + 2-of-2 sigs + DOGE policy)</span>
+          <span class="detail">locktime 500060 satisfied at height 500065 | input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee clears -blockmintxfee (304000) — miners with default policy would include it | fee 1000000 sats over 304 bytes (3289.47 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session reached a refund state</span>
+          <span class="detail">ALT_REFUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE returned to Bob's refund address (amount minus refund fee)</span>
+          <span class="detail">49999000000 vs expected 49999000000 at D933ZqCgV52una9nQMYSt1CgGVZh1CEX6R</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE multisig fully swept by refund</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (DOGE)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice never claimed: no secret was ever revealed on the alt chain</span>
+          <span class="detail">2 alt broadcasts (funding + refund only)</span>
+        </li>
+    </ol>
+    <details>
+      <summary>3 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">7955f07b30aa4810de575dc2ae55d3c9fc336b895952c72c1c2260d4215ff54d</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 03c375c2a459389c…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000127d8017d36292b9a9b369bc416329344fa9bb27b9289ea40dd67118418352f60000000006b483045022100ab0871bad7cd1c6013877ba8ceea2b35039e3d247b802147ebbf1d38c19edd79…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">DOGE</span></td>
+      <td class="mono small">acaf84d9789b1dda6f85ef49134797b05e55c6ee3352f4447bcbc40d1ae549a3</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 02da10179b9489bb…)</div><div>fee clears -blockmintxfee (224000) — miners with default policy would include it</div><div>fee 1000000 sats over 224 bytes (4464.29 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001098a8012324a635945142e3d766c530902b2063d9ece204d74da2414ac256a74000000006b48304502210084f1879abf02b9752a61debe5018060fb8dfe55bf53fd3e0d84cba97ce3ab903…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">DOGE</span></td>
+      <td class="mono small">68e516b082941f6a09bceeb8baed4fef74a13e9bc789572355905625535dae90</td>
+      <td class="small"><div>locktime 500060 satisfied at height 500065</div><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee clears -blockmintxfee (304000) — miners with default policy would include it</div><div>fee 1000000 sats over 304 bytes (3289.47 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001a349e51a0dc4cb7b44f45233eec6555eb097471349ef856fda1d9b78d984afac00000000db004830450221008bcffaa15907a73533874ab4824e47652498f795371e8afe3a5888e396f12d…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_rod_funding_planned, swap_alt_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_refund_broadcast</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain btc">ROD ↔ BTC</span>
+      happy
+      <span class="pill pass">29/29 checks</span>
+    </h3>
+    <p class="meta">swapId <code>05cf078a31e49a79600e63f5ac494983928f275badb69df4148ea8705266eff0</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 05cf078a31e49a79…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500006,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RJYCor6JhKUvie6XhN2oXbJLvxeeVfbPnz","buyerAltRefundAddress":"1HaZRbMxjyy1TcygZj6QuNFAzE5xGPMr5c","nonce":"9f0ccd992b6fc97799927b8d32cfaf25"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, BTC refund locks at 500006</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 026c482cb1c7185a…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding txid equals PLANNED txid (refunds/adaptor sigs bind to it)</span>
+          <span class="detail">f9139012e7632595… vs planned f9139012e7632595…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">timeline: PREPARED precedes ROD funding broadcast</span>
+          <span class="detail">OPEN → NEGOTIATING → BILATERAL_READY → TERMS_ACCEPTED → REFUNDS_READY → SIGNATURES_EXCHANGED → PREPARED → ALICE_ROD_FUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC funding tx broadcast &amp; independently validated (0.01000000 BTC)</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 038f0cde8bda0a43…) | fee 5000 sats over 223 bytes (22.42 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 5000 sats over 304 bytes (16.45 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">recovered secret verifies against adaptor point (yG == Y)</span>
+          <span class="detail">state SECRET_RECOVERED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 303 bytes (234.32 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session COMPLETE</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session COMPLETE</span>
+          <span class="detail">COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice received BTC at her payout address</span>
+          <span class="detail">995000 sats at 1PCDdZ6FS6gf4fpbddD7Gwa1E8RP8hZuNi</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob received ROD at his payout address</span>
+          <span class="detail">9999929000 sats at RWuGa7gUSYrqf6knTrhmpQTePqSCT3ewbm</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero normal-signature messages on relay (settlement fully adaptor-based)</span>
+          <span class="detail">message types seen: swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_rod_funding_planned, swap_alt_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (BTC)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>4 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">f9139012e7632595a0631ba72d1abc62a2d6eb724ddc4c5cec929aca1d31c6c6</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 026c482cb1c7185a…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000121133be7d459929851ca377ce4de1da11fe70ee71457f56faca5a0639bc75cf8000000006b483045022100eea0ed90f4e960ba8c207035d70e3ff30205dcbbabdce74a8164dfab49b78c7f…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">37fee887961b9f9d17659b0df885eb0c5c133c6f2bff4dfca2d5c9a27390651c</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 303 bytes (234.32 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001c6c6311dca9a92ec5c4cdc4d72ebd6a262bc1a2da71b63a0952563e7129013f900000000da0047304402207c9f1324d6ac7b1d9960d2452132d9826dbef03a989092b83d2187d291c5c24d…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">BTC</span></td>
+      <td class="mono small">de4aa510d55e7fcb8ee302ddef13332460940a452b2a42cf0b5b5fb54e4a60e4</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 038f0cde8bda0a43…)</div><div>fee 5000 sats over 223 bytes (22.42 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001da29b2f5c24e2ed6fd5c2ed9bbd2d2244ad624eebf2c72a5f03c90dd5a51bada000000006a473044022013c6751c623dbd62bfe0857a7876df03a6d391e8494787e0a9900073474ec3f002…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">BTC</span></td>
+      <td class="mono small">3b6d7fa417a03ed0bfc99da9582c1a5fab62635f530185193d6db0fa111a76d9</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 5000 sats over 304 bytes (16.45 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001e4604a4eb55f5b0bcf422a2b450a9460243313efdd02e38ecb7f5ed510a54ade00000000db00483045022100848adb17b57bfae19a00dfca373b0eb9817d02e66699b78014a00a2e084d98…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_rod_funding_planned, swap_alt_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain btc">ROD ↔ BTC</span>
+      refund
+      <span class="pill pass">21/21 checks</span>
+    </h3>
+    <p class="meta">swapId <code>2dfeb453fe0478fcec106ff46e9402b7eebef7ea80956066c0131aa68d378b95</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 2dfeb453fe0478fc…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500006,"rodConfirmations":3,"altConfirmations":1,"sellerRodRefundAddress":"RUXQhKKGghT6zJc74xWJiDTSkXSosTKTrn","buyerAltRefundAddress":"1L45YwW2o4rC4TzNzdZXXDSH9huCdh3ffj","nonce":"9e2b3d77e0350cd31076d1162b6b5cee"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, BTC refund locks at 500006</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 02dd7be8daf045db…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">confirmation gate held: Bob did NOT fund BTC at 1/3 confirmations</span>
+          <span class="detail">alt broadcasts: 0</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob disappeared (context closed) after ROD funding</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund broadcast &amp; independently validated (locktime + 2-of-2 sigs)</span>
+          <span class="detail">locktime 500030 satisfied at height 500035 | input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 302 bytes (235.10 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session reached refund state</span>
+          <span class="detail">REFUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">funds returned to Alice refund address (amount minus refund fee)</span>
+          <span class="detail">9999929000 sats at RUXQhKKGghT6zJc74xWJiDTSkXSosTKTrn</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept by refund</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero BTC broadcasts at all (Bob never funded)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>2 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">a49d7e8abb7b35976c0643f8cb3d7ea723472a351510733cb18eaaa4620b6e0e</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 02dd7be8daf045db…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001d166fd58f9c6c14e0e97518b146a480f54f10136e3a021dda3ef9ce3823ba2d7000000006b483045022100e99e5ab2febd4ce61841316527b11a42f8c5d09a21a256c371befa92c67983e0…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">5d026b9e815529c4c0c56def8ad3ad426baa1901e561850826b0554fefcfcd14</td>
+      <td class="small"><div>locktime 500030 satisfied at height 500035</div><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 302 bytes (235.10 sat/B)</div></td>
+      <td class="mono tiny wrap">01000000010e6e0b62a4aa8eb13c731015352a4723a77e3dcbf843066c97357bbb8a7e9da400000000d90047304402203641efd45ff0216140db00a7e0b616dc543615ba6969819500d83b074ae169b0…</td>
+    </tr>
+          
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_rod_refund_broadcast, swap_refunded</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain btc">ROD ↔ BTC</span>
+      altrefund
+      <span class="pill pass">22/22 checks</span>
+    </h3>
+    <p class="meta">swapId <code>80dcff9d4e1ead862ef9402da0b9105de969905765a3c76268b6064ea1921dfb</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 80dcff9d4e1ead86…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500006,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RDe2k1AfBiyz9hyTvqwjGwybMgM9zPhW8c","buyerAltRefundAddress":"1BW1tiTQGQfexuNVRsB3bwDHxGLUBF7FMr","nonce":"0dda51266243abb67912747766ea6713"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, BTC refund locks at 500006</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 025a6b5504cfdd0e…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 027e14d612f1f719…) | fee 5000 sats over 224 bytes (22.32 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed BTC refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500006 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice disappeared (context closed) without claiming</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed BTC refund broadcast &amp; independently validated (locktime + 2-of-2 sigs + BTC policy)</span>
+          <span class="detail">locktime 500006 satisfied at height 500011 | input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 5000 sats over 302 bytes (16.56 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session reached a refund state</span>
+          <span class="detail">ALT_REFUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC returned to Bob's refund address (amount minus refund fee)</span>
+          <span class="detail">995000 vs expected 995000 at 1BW1tiTQGQfexuNVRsB3bwDHxGLUBF7FMr</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC multisig fully swept by refund</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (BTC)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice never claimed: no secret was ever revealed on the alt chain</span>
+          <span class="detail">2 alt broadcasts (funding + refund only)</span>
+        </li>
+    </ol>
+    <details>
+      <summary>3 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">d9b4b6eb3de8ee55e8e0e6b71b40b07fc71235741efbada15fbc9afd8dcaf60b</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 025a6b5504cfdd0e…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001a55c6fcd513a10bbf198ccb37fd9d17853dae6aa8701413c67e296c21a2df0a9000000006b48304502210097d731824ab41652a4872aa3cf49e5703ae95557d929fac92e48781983f5dafc…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">BTC</span></td>
+      <td class="mono small">5d74eb3d607b63a0576077b45d15c480efd89ee1f4f3a570ebe67e7439484b5b</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 027e14d612f1f719…)</div><div>fee 5000 sats over 224 bytes (22.32 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000146dda827c4fe1ce004ee441af09557a261d3fd60c0288092d3b6b20ec196f3b8000000006b483045022100c312cebe77f344fe99497ef54d28005418c29b99c96ae10a196a129674589cf7…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">BTC</span></td>
+      <td class="mono small">08e589f8149cc201d1f70c326d26fc5bad0293a7354acca370fdfdf7a582bbe6</td>
+      <td class="small"><div>locktime 500006 satisfied at height 500011</div><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 5000 sats over 302 bytes (16.56 sat/B)</div></td>
+      <td class="mono tiny wrap">01000000015b4b4839747ee6eb70a5f3f4e19ed8ef80c4155db4776057a0637b603deb745d00000000d90047304402206f4b19a525ea0ac336b5929b5ef0811e4341acc0ff810403a27fc80e3002ad5d…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_refund_broadcast</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain bch">ROD ↔ BCH</span>
+      happy
+      <span class="pill pass">29/29 checks</span>
+    </h3>
+    <p class="meta">swapId <code>aa7d14be170d5c00bc09e52b0b9da161dd3b966e1778c4a6114a04cf7df75f04</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId aa7d14be170d5c00…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500006,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RQ1wJigcCFj3nK39FaBWaCaKjfcSehdo1P","buyerAltRefundAddress":"1FNicECZzuyF9CSTJD5NERcnPHBit1Vcz7","nonce":"e15c8faf43beb4754d36c81fe68d3ecd"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, BCH refund locks at 500006</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 0394efe0babd1bdd…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding txid equals PLANNED txid (refunds/adaptor sigs bind to it)</span>
+          <span class="detail">57abf9681f38c28c… vs planned 57abf9681f38c28c…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">timeline: PREPARED precedes ROD funding broadcast</span>
+          <span class="detail">OPEN → NEGOTIATING → BILATERAL_READY → TERMS_ACCEPTED → REFUNDS_READY → SIGNATURES_EXCHANGED → PREPARED → ALICE_ROD_FUNDED → BOB_ALT_FUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH funding tx broadcast &amp; independently validated (0.01000000 BCH)</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 023ae03b5bcdda33…) | fee 1000 sats over 224 bytes (4.46 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 1000 sats over 302 bytes (3.31 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">recovered secret verifies against adaptor point (yG == Y)</span>
+          <span class="detail">state COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 302 bytes (235.10 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session COMPLETE</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session COMPLETE</span>
+          <span class="detail">COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice received BCH at her payout address</span>
+          <span class="detail">999000 sats at 16XFjxE31R8q8tbF67LkS4YKM5UNKVFATi</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob received ROD at his payout address</span>
+          <span class="detail">9999929000 sats at RUSEaxXaX2jaUfUVPLezQ4tkQP5r6FYqW5</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero normal-signature messages on relay (settlement fully adaptor-based)</span>
+          <span class="detail">message types seen: swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (BCH)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>4 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">57abf9681f38c28c84f2664532c4fb4b281388642ee324569d11276946c4d2e7</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 0394efe0babd1bdd…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001a150901ea9876aee5be2433a6ac52bca2fa92f995502f4a6908fd61e490ba23c000000006b483045022100b644532bc6ddf58fdfa5a79b9474147f8d262ebdc3a87b3b9fa8fd8feeb020a2…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">c11e2fa96a3685c3863fe466a8768a94fffad6118ef1ccc291041751f027b123</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 302 bytes (235.10 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001e7d2c4466927119d5624e32e648813284bfbc4324566f2848cc2381f68f9ab5700000000d90047304402207b3d08de40107da1e0b1d999ad0c0b920befad47b64530fc3014dbe62c2a4312…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">BCH</span></td>
+      <td class="mono small">e6fc868b5290ac554920bb97f37b1556e416ad8828d8e976076a063ab7d90ef2</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 023ae03b5bcdda33…)</div><div>fee 1000 sats over 224 bytes (4.46 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000134f43fccb10238456c846a1b8c8c7fce9abd5c46e916680ee6dc5ad10933cf70000000006b483045022100d3c3370bd796cb079167bbf3f9b0a070488dcc18282597107440ce3ccc0a2747…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">BCH</span></td>
+      <td class="mono small">21b5f4585b85774dc111f79e623f29b54b036dd6ef0431cc93a915f59ac245e2</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 1000 sats over 302 bytes (3.31 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001f20ed9b73a066a0776e9d82888ad16e456157bf397bb204955ac90528b86fce600000000d90047304402203adf5e907634f182d8b106d45cba0cc442b6542374cd6ea5ff34d3787d4886ce…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain bch">ROD ↔ BCH</span>
+      refund
+      <span class="pill pass">21/21 checks</span>
+    </h3>
+    <p class="meta">swapId <code>71fe1a9c34415808f8a50c437a5ff852d6522eca505ac99019bc12071b77dc13</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 71fe1a9c34415808…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500006,"rodConfirmations":3,"altConfirmations":1,"sellerRodRefundAddress":"RQsuF7HUNDF8E86NaQV9C4L9vbJMj7n2Rw","buyerAltRefundAddress":"1NZ5Qs4by5SB5Q9X2vjc5nHRy3oT3pkjjH","nonce":"9110d5bf0ee1aa709aac1a2f8fe0fea2"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, BCH refund locks at 500006</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 027953e34b4697ba…) | fee 53000 sats over 223 bytes (237.67 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">confirmation gate held: Bob did NOT fund BCH at 1/3 confirmations</span>
+          <span class="detail">alt broadcasts: 0</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob disappeared (context closed) after ROD funding</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund broadcast &amp; independently validated (locktime + 2-of-2 sigs)</span>
+          <span class="detail">locktime 500030 satisfied at height 500035 | input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 302 bytes (235.10 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session reached refund state</span>
+          <span class="detail">REFUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">funds returned to Alice refund address (amount minus refund fee)</span>
+          <span class="detail">9999929000 sats at RQsuF7HUNDF8E86NaQV9C4L9vbJMj7n2Rw</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept by refund</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero BCH broadcasts at all (Bob never funded)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>2 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">85a7357dffbb088c5b641c2351e1eb9cfcf7a1bc61ee6f704f3679c85f3cf522</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 027953e34b4697ba…)</div><div>fee 53000 sats over 223 bytes (237.67 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001c20b2fd38096bff3233a256b73d165f08e94928e477fab16bd9907a0ae50ac6e000000006a47304402202ae6fc99cef1e660a652b438fd12064ee4c66a3bf4345760a5abc4219a2c6a9902…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">ea4e0f0575be7e81aced012146441d807bcd3e41e1cb3dbee968eed656ecdb80</td>
+      <td class="small"><div>locktime 500030 satisfied at height 500035</div><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 302 bytes (235.10 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000122f53c5fc879364f706fee61bca1f7fc9cebe151231c645b8c08bbff7d35a78500000000d9004730440220621182efb99fe616e792fe369e8dd00b731e9ac5292d7321087daa4e55b376cb…</td>
+    </tr>
+          
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_rod_refund_broadcast, swap_refunded</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain bch">ROD ↔ BCH</span>
+      altrefund
+      <span class="pill pass">22/22 checks</span>
+    </h3>
+    <p class="meta">swapId <code>230da49208a62bb0356ae35910bec28d8c0afe6e165a5cd6ab60457fb59d060b</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 230da49208a62bb0…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500006,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RGKF1koxwuScfvAdDt4pRvT7KQwQtQBGpJ","buyerAltRefundAddress":"1JPFKY6RGyBD5Fe24FJT2v7a8iAd9QGRnw","nonce":"c208ecf1f1cbb654e1c3f858195d6aa7"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, BCH refund locks at 500006</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 02f34f551c0c471f…) | fee 53000 sats over 223 bytes (237.67 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 03df3b8e79075033…) | fee 1000 sats over 223 bytes (4.48 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed BCH refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500006 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice disappeared (context closed) without claiming</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed BCH refund broadcast &amp; independently validated (locktime + 2-of-2 sigs + BCH policy)</span>
+          <span class="detail">locktime 500006 satisfied at height 500011 | input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 1000 sats over 303 bytes (3.30 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session reached a refund state</span>
+          <span class="detail">ALT_REFUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH returned to Bob's refund address (amount minus refund fee)</span>
+          <span class="detail">999000 vs expected 999000 at 1JPFKY6RGyBD5Fe24FJT2v7a8iAd9QGRnw</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH multisig fully swept by refund</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (BCH)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice never claimed: no secret was ever revealed on the alt chain</span>
+          <span class="detail">2 alt broadcasts (funding + refund only)</span>
+        </li>
+    </ol>
+    <details>
+      <summary>3 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">88f98d1e9ca8e8f29377d78e1d43f9f10cdaf6fb007d40c4309da4f30825f38a</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 02f34f551c0c471f…)</div><div>fee 53000 sats over 223 bytes (237.67 sat/B)</div></td>
+      <td class="mono tiny wrap">01000000013af3235e09e18cd72278f63a605f29f160dbc5eb075b37b51a00ee7a79d09ed8000000006a473044022070f59857800dbf4cddb07de8d9c3896e34d1a24051cad063acae29a46a3c150a02…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">BCH</span></td>
+      <td class="mono small">21ca18f09dfbb74ae4ba347cca9e7499010b3dba4fe65cb45c43a001b774520d</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 03df3b8e79075033…)</div><div>fee 1000 sats over 223 bytes (4.48 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000180dabfb8ef3ba12b4d54fc9139e7ea5ab6c1c0ae632acd804b900e2684aa0437000000006a47304402203a67033f35f029239d95c54b8d52be467b751000521a46ceb8d26d69bb2bc60302…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">BCH</span></td>
+      <td class="mono small">c9ca64686a0f18a377d6b0912f521fd6fb7d806870f39e811c3316bacf361d94</td>
+      <td class="small"><div>locktime 500006 satisfied at height 500011</div><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 1000 sats over 303 bytes (3.30 sat/B)</div></td>
+      <td class="mono tiny wrap">01000000010d5274b701a0435cb45ce64fba3d0b0199749eca7c34bae44ab7fb9df018ca2100000000da004730440220673620ceb2aa896668c7a3169b6a95b288ec5f57b1bdb81fd35d0d7db47c49ed…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_refund_broadcast</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain ltc">ROD ↔ LTC</span>
+      happy
+      <span class="pill pass">30/30 checks</span>
+    </h3>
+    <p class="meta">swapId <code>0c21c2b249d074ebd2e912787e0a87d1478d8462c0536738157f99720ee693c5</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 0c21c2b249d074eb…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500040,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RDkLi9KZcTF1kfVMpCoNnCqT15yps6wgkY","buyerAltRefundAddress":"LLFawjMHXjDUDBFseBBF4eTnRciVMFurpD","nonce":"b80702481acf6a480ea8a131d7d5a708"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, LTC refund locks at 500040</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 0292cbb1baf98649…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding txid equals PLANNED txid (refunds/adaptor sigs bind to it)</span>
+          <span class="detail">4de0ae074e56848d… vs planned 4de0ae074e56848d…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">timeline: PREPARED precedes ROD funding broadcast</span>
+          <span class="detail">OPEN → NEGOTIATING → BILATERAL_READY → TERMS_ACCEPTED → REFUNDS_READY → SIGNATURES_EXCHANGED → PREPARED → ALICE_ROD_FUNDED → BOB_ALT_FUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC funding tx broadcast &amp; independently validated (0.05000000 LTC)</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 03ea84f50ad56708…) | fee 1000 sats over 224 bytes (4.46 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">after reload: adaptor sig, refund and secret persisted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 1000 sats over 303 bytes (3.30 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">recovered secret verifies against adaptor point (yG == Y)</span>
+          <span class="detail">state SECRET_RECOVERED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 303 bytes (234.32 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session COMPLETE</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session COMPLETE</span>
+          <span class="detail">COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice received LTC at her payout address</span>
+          <span class="detail">4999000 sats at LZ686eVZxCu62w42jq5S5imG3F9a53Z2J6</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob received ROD at his payout address</span>
+          <span class="detail">9999929000 sats at RDtbMiGEqYPZcjn5G8Lx1qBWg5YNNYbphs</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">LTC multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero normal-signature messages on relay (settlement fully adaptor-based)</span>
+          <span class="detail">message types seen: swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_rod_funding_planned, swap_alt_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (LTC)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>4 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">4de0ae074e56848dd918a36f4c9c7169f8fb2cb7c4ab41eb80c686a56676ca2f</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 0292cbb1baf98649…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000144ac04ed142933eb5dde53c9d13784975ad205c1f37f193c4945ebbe0a595364000000006b483045022100ac589b63b8391f99c9358a982727e848d07cddbbe5b394151ebda0fd7d16b847…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">78ae838ca8b860ff5c6ae2cd6b3d39f480d2341bfad0e6cec31c8586c436281a</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 303 bytes (234.32 sat/B)</div></td>
+      <td class="mono tiny wrap">01000000012fca7666a586c680eb41abc4b72cfbf869719c4c6fa318d98d84564e07aee04d00000000da00483045022100c0aa4d92985ae6420834fe581f90ea8dba628660a20ae6cd7323fb1ce1583e…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">LTC</span></td>
+      <td class="mono small">0c99c708f46fbaf2ac263a6e3e3659f11d901da403c0294f8d421b6391a813d5</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 03ea84f50ad56708…)</div><div>fee 1000 sats over 224 bytes (4.46 sat/B)</div></td>
+      <td class="mono tiny wrap">010000000112e73e2b966110bb6e7c5b98961b57ab525363e4e179b66477a2b7a2e2307b7a000000006b483045022100f5cc11c24b40c7624ce9e9fa78b633eeae2e59a857edd3da4020ceb92fdc2d88…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">LTC</span></td>
+      <td class="mono small">c9db53dd2f299f06f18f5994d3ba179b54d4e18b01061184588761c83e2bfc83</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 1000 sats over 303 bytes (3.30 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001d513a891631b428d4f29c003a41d901df159363e6e3a26acf2ba6ff408c7990c00000000da0047304402206fe3de492a887b4e2b978cb22d64d7279740f027a97ce9187f1448317d8bc4d1…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_rod_funding_planned, swap_alt_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain doge">ROD ↔ DOGE</span>
+      happy
+      <span class="pill pass">30/30 checks</span>
+    </h3>
+    <p class="meta">swapId <code>4251faeaa1e97f33437798fbcf2ada6170a8cdc46f5a6d97e9eb465642d569c1</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId 4251faeaa1e97f33…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500060,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RHH9bGHBuUpELrqsgSctc1o9RscaQy9MNj","buyerAltRefundAddress":"DEmogcexCyF5hTFYJ9Fd9etAR66PsJvJVX","nonce":"ab554f23945ded97c4945778d1917415"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, DOGE refund locks at 500060</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 02e5c12d0218f1e6…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding txid equals PLANNED txid (refunds/adaptor sigs bind to it)</span>
+          <span class="detail">ec1accb7c7ae4817… vs planned ec1accb7c7ae4817…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">timeline: PREPARED precedes ROD funding broadcast</span>
+          <span class="detail">OPEN → NEGOTIATING → BILATERAL_READY → TERMS_ACCEPTED → REFUNDS_READY → SIGNATURES_EXCHANGED → PREPARED → ALICE_ROD_FUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE funding tx broadcast &amp; independently validated (500.00000000 DOGE)</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 02ad40b41cf70697…) | fee clears -blockmintxfee (224000) — miners with default policy would include it | fee 1000000 sats over 224 bytes (4464.29 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">after reload: adaptor sig, refund and secret persisted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee clears -blockmintxfee (303000) — miners with default policy would include it | fee 1000000 sats over 303 bytes (3300.33 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">recovered secret verifies against adaptor point (yG == Y)</span>
+          <span class="detail">state SECRET_RECOVERED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 303 bytes (234.32 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session COMPLETE</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session COMPLETE</span>
+          <span class="detail">COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice received DOGE at her payout address</span>
+          <span class="detail">49999000000 sats at DTnc8jWB6AcXoCD2s2NjL8EGXdWnSCWZ7n</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob received ROD at his payout address</span>
+          <span class="detail">9999929000 sats at RFMycafd5tBzBWw13u8apLd9absWrXFh4P</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">DOGE multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero normal-signature messages on relay (settlement fully adaptor-based)</span>
+          <span class="detail">message types seen: swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (DOGE)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>4 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">ec1accb7c7ae48175ea77b10139390313e490d34c6a76d5938bc5b6dcc265800</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 02e5c12d0218f1e6…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001b6bffdbba66a3b994b042f496d28914b9735de290863f9740a1d6c5ee90ba1e6000000006b483045022100f58328c9a667cd73632dcaef27c862748232279b8263989575cd12deaf6d475c…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">ffbd1f51d59fe241914466ccbe8da6664390e521f0525290d4106d224f449237</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 303 bytes (234.32 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001005826cc6d5bbc38596da7c6340d493e31909313107ba75e1748aec7b7cc1aec00000000da00473044022062742fd6548db0b8cc5be989cf23c813ec5b14590ca1eda1bb1da259bc425f24…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">DOGE</span></td>
+      <td class="mono small">5ef3698a2ebd124b111867f803f60ba5c171cd2cdd6da2f54225ef88bbb01ee6</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 02ad40b41cf70697…)</div><div>fee clears -blockmintxfee (224000) — miners with default policy would include it</div><div>fee 1000000 sats over 224 bytes (4464.29 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001bb6c3048aa0146b954342909e58149fdfeb867b4964820d693691f6b0fc462e4000000006b483045022100b4a2b15dd96287240f8f88d6e7e5c0960143ad5fc881e0cce9e3634f311722c9…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">DOGE</span></td>
+      <td class="mono small">9972debe51feffa0799acd96a64effa37b1cb583800c658e62a971b7ef988e3a</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee clears -blockmintxfee (303000) — miners with default policy would include it</div><div>fee 1000000 sats over 303 bytes (3300.33 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001e61eb0bb88ef2542f5a26ddd2ccd71c1a50bf603f86718114b12bd2e8a69f35e00000000da00483045022100941dc1363874178052111b8af507fecdf3dffc41ac8e637ff342872bc51ccb…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain btc">ROD ↔ BTC</span>
+      happy
+      <span class="pill pass">30/30 checks</span>
+    </h3>
+    <p class="meta">swapId <code>c127b39a43615808ca264e76426224c0bd5135d442fca04cfbebfdc4b053e278</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId c127b39a43615808…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500006,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RGDLYimod6SGBexR2u1qRKzhQFtPhvNxwA","buyerAltRefundAddress":"1A1ZSiZDRq67pvqUGmrBU4HD7b1T8rMpND","nonce":"3c1d79acb7482ee05f904917ca8a40d0"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, BTC refund locks at 500006</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 0309e0f3db226572…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding txid equals PLANNED txid (refunds/adaptor sigs bind to it)</span>
+          <span class="detail">464fdf44ddbab26f… vs planned 464fdf44ddbab26f…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">timeline: PREPARED precedes ROD funding broadcast</span>
+          <span class="detail">OPEN → NEGOTIATING → BILATERAL_READY → TERMS_ACCEPTED → REFUNDS_READY → SIGNATURES_EXCHANGED → PREPARED → ALICE_ROD_FUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC funding tx broadcast &amp; independently validated (0.01000000 BTC)</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 02c4e7b8c943e3a2…) | fee 5000 sats over 223 bytes (22.42 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">after reload: adaptor sig, refund and secret persisted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 5000 sats over 302 bytes (16.56 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">recovered secret verifies against adaptor point (yG == Y)</span>
+          <span class="detail">state SECRET_RECOVERED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 303 bytes (234.32 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session COMPLETE</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session COMPLETE</span>
+          <span class="detail">COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice received BTC at her payout address</span>
+          <span class="detail">995000 sats at 1DjkVqCpWdSrQ1j5tG85wGioB1y3RcEHYt</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob received ROD at his payout address</span>
+          <span class="detail">9999929000 sats at RExgv3aQyPdevmP3sPDUwEdosQeHTcNHdw</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BTC multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero normal-signature messages on relay (settlement fully adaptor-based)</span>
+          <span class="detail">message types seen: swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (BTC)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>4 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">464fdf44ddbab26ffc82cd8f36d6c301c696c93e3391c722f3e93c2d50ee0ddb</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 0309e0f3db226572…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001687ac425314a4d2ba1fac433d80a9bfb53aca8021f0dcb6584a8cc77a6c31cbc000000006b483045022100e450d1203f5e3d98bffcda616a573846d728abb4833d103f4b4614952f6be530…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">e891fa4a4c091e8f4450be8d7c87a64f3fa6e13fecaa408ba2396b27d99a06a2</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 303 bytes (234.32 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001db0dee502d3ce9f322c791333ec996c601c3d6368fcd82fc6fb2badd44df4f4600000000da004730440220304f98a97b172eef99e3e5dab556b3ac9ce407b77c2d1fcc824504994481d998…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">BTC</span></td>
+      <td class="mono small">8e33c5c62db0a698bbe4198cf27d24d3bfa2a7960427d28668471f8a85920f1e</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 02c4e7b8c943e3a2…)</div><div>fee 5000 sats over 223 bytes (22.42 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001d60216971381b22bb9727cd9b4088ab951e61ecc8e515ddc4528e0b5be1cc1f8000000006a47304402207f95e81bdd6c06bcb0cd5307d02224bf43a1114d1f067fb12a277e1b43d539cc02…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">BTC</span></td>
+      <td class="mono small">c39ecda88ac99c3ef044745a763333674cc2c46ea17455af608d20b4b9bf1c35</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 5000 sats over 302 bytes (16.56 sat/B)</div></td>
+      <td class="mono tiny wrap">01000000011e0f92858a1f476886d2270496a7a2bfd3247df28c19e4bb98a6b02dc6c5338e00000000d90047304402202f58a3e380df17d3147cdf35be69807603878b5d60d8946713464815cd620d64…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_rod_funding_planned, swap_alt_refund_signature, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</p></details>
+  </section>
+
+  <section>
+    <h3>
+      <span class="chain bch">ROD ↔ BCH</span>
+      happy
+      <span class="pill pass">30/30 checks</span>
+    </h3>
+    <p class="meta">swapId <code>a5cbf8a5dbab878dcaab8416cb603291d39af822c11faeb38c9bc015a24e8eb0</code></p>
+    <ol class="checks">
+      
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob: in-page OTC validation suite</span>
+          <span class="detail">ECDSA adaptor primitives:ok, Immutable chain helpers:ok, Versioned OTC storage:ok, Manual OTC Nostr envelopes:ok, ROD name helper adapter:ok, Swap account and terms fixtures:ok</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both pages connected to local Nostr relay</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">swap accounts derived (both)</span>
+          <span class="detail">bob xpub xqTYSG7VWMaY…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice created swap session</span>
+          <span class="detail">swapId a5cbf8a5dbab878d…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">terms include refund heights + confirmations + 5-field swapId nonce</span>
+          <span class="detail">{"refundRodHeight":500030,"altRefundLockHeight":500006,"rodConfirmations":1,"altConfirmations":1,"sellerRodRefundAddress":"RCk5XiSk7J5PZDe1PiBuRBRG2uoESVWe3S","buyerAltRefundAddress":"179f993GhPQKqQJL8jAVut1gtKvY5x4sNB","nonce":"dca93519d6a1d23644cc19eeee2028e0"}</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob auto-created session from incoming terms</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice accepted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">refund locktimes match terms</span>
+          <span class="detail">ROD refund locks at 500030, BCH refund locks at 500006</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding tx broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 02886e88847f59d9…) | fee 53000 sats over 224 bytes (236.61 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD funding txid equals PLANNED txid (refunds/adaptor sigs bind to it)</span>
+          <span class="detail">7f302290d24381a9… vs planned 7f302290d24381a9…</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">pre-signed ROD refund rejected as non-final before lock height</span>
+          <span class="detail">non-final: locktime 500030 &gt; height 500000</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">timeline: PREPARED precedes ROD funding broadcast</span>
+          <span class="detail">OPEN → NEGOTIATING → BILATERAL_READY → TERMS_ACCEPTED → REFUNDS_READY → SIGNATURES_EXCHANGED → PREPARED → ALICE_ROD_FUNDED → BOB_ALT_FUNDED</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH funding tx broadcast &amp; independently validated (0.01000000 BCH)</span>
+          <span class="detail">input 0: P2PKH signature valid (pubkey 03147359dff1b454…) | fee 1000 sats over 224 bytes (4.46 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH funding txid equals PLANNED txid</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">after reload: adaptor sig, refund and secret persisted</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 1000 sats over 303 bytes (3.30 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">recovered secret verifies against adaptor point (yG == Y)</span>
+          <span class="detail">state COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD claim tx (2-of-2 P2SH, completed adaptor sig) broadcast &amp; independently validated</span>
+          <span class="detail">input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 71000 sats over 303 bytes (234.32 sat/B)</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob session COMPLETE</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice session COMPLETE</span>
+          <span class="detail">COMPLETE</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">alice received BCH at her payout address</span>
+          <span class="detail">999000 sats at 1L3WHDTvWfwPZGUg9Ah4keqWxZ8PxTGZ2q</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">bob received ROD at his payout address</span>
+          <span class="detail">9999929000 sats at RQqb67xjq166E9RPuTgWqATrR6pj2pgbn5</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">BCH multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">ROD multisig fully swept</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero normal-signature messages on relay (settlement fully adaptor-based)</span>
+          <span class="detail">message types seen: swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_alt_refund_signature, swap_rod_funding_planned, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</span>
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (ROD)</span>
+          
+        </li>
+        <li class="ok">
+          <span class="mark">✓</span>
+          <span class="what">zero invalid broadcast attempts (BCH)</span>
+          
+        </li>
+    </ol>
+    <details>
+      <summary>4 independently validated broadcasts</summary>
+      <table>
+        <thead><tr><th>Chain</th><th>txid</th><th>Validator findings</th><th>Raw hex</th></tr></thead>
+        <tbody>
+          
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">7f302290d24381a93d9be261e8ad3dc0807b5564c7c380c9df4ea3e135f321e9</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 02886e88847f59d9…)</div><div>fee 53000 sats over 224 bytes (236.61 sat/B)</div></td>
+      <td class="mono tiny wrap">01000000012de047176c24b8445a0caba3768119c447ad770db53453262073a3174b085074000000006b483045022100b9d7768fc8b2c16e43443571f2fffdf9112f9b73d3b7db4b2a6d25136db34c4f…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">ROD</span></td>
+      <td class="mono small">a821226bf30d30efc957bc77caeaedcbde4b43f2397de8fa6bfc46f1b0babe3e</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 71000 sats over 303 bytes (234.32 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001e921f335e1a34edfc980c3c764557b80c03dade861e29b3da98143d29022307f00000000da00483045022100db9e8a98e8cb1095dd753be94185748fcc244fac51f75bc9e84a7f65c00f59…</td>
+    </tr>
+          
+    <tr class="">
+      <td><span class="tag">BCH</span></td>
+      <td class="mono small">3b86830ccfd054b66ffdb444061d426002bf2dee42b0e69e2fbff379d6e5b9f5</td>
+      <td class="small"><div>input 0: P2PKH signature valid (pubkey 03147359dff1b454…)</div><div>fee 1000 sats over 224 bytes (4.46 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001b1b88baeb381404ad32e7f5c01d0c21488063c8bf058728469503f8884156d66000000006b483045022100b8f6d00540f0a119d6105948656aa8bf61953cceaeaaa83ff44879376caf8c85…</td>
+    </tr>
+    <tr class="">
+      <td><span class="tag">BCH</span></td>
+      <td class="mono small">8676b4ad2343c45935bb789c8233cceb9c5ae63f405f799068f09feafb037596</td>
+      <td class="small"><div>input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)</div><div>fee 1000 sats over 303 bytes (3.30 sat/B)</div></td>
+      <td class="mono tiny wrap">0100000001f5b9e5d679f3bf2f9ee6b042ee2dbf0260421d0644b4fd6fb654d0cf0c83863b00000000da00483045022100d51342e35d0a4143b1dfb35febd06bc191feb096e2cf5ceaa9f8178912003f…</td>
+    </tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>Nostr message types observed on the relay</summary>
+      <p class="mono tiny wrap">swap_terms, swap_adaptor_point, swap_ready, swap_accept, swap_alt_funding_planned, swap_alt_refund_signature, swap_rod_funding_planned, swap_rod_refund_signature, swap_alt_adaptor_signature, swap_rod_adaptor_signature, swap_prepared, swap_rod_funded, swap_alt_funded, swap_alt_claimed, swap_secret_recovered, swap_rod_claimed, swap_complete</p></details>
+  </section>
+
+  <p class="note">
+    <strong>LTC</strong> and <strong>BTC</strong> use Esplora. <strong>DOGE</strong> uses the
+    BlockCypher explorer adapter, so a green DOGE result also proves that adapter translates a
+    genuinely different API end to end. <strong>BCH</strong> uses Blockchair, and its mock
+    validator independently computes the BIP-143 fork-id preimage via bitcoinjs-lib's
+    <code>hashForWitnessV0</code> — so a green BCH result proves that BCH signatures commit to
+    the correct sighash and would be accepted on mainnet. Each chain enforces its own consensus
+    and relay policy: dust limits, per-chain fee floors, <code>nLockTime</code> finality,
+    strict-DER + low-S canonicality, and P2SH 2-of-2 <code>OP_CHECKMULTISIG</code>.
+  </p>
+</div></body></html>

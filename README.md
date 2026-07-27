@@ -3,42 +3,50 @@
 
 # rod-web-swap
 
-Static browser-based SpaceXpanse ROD wallet with an integrated experimental OTC swap engine.
+Static browser-based SpaceXpanse ROD wallet with an integrated OTC swap runtime.
+
+## Status
+
+The current shipped release is [`2.8.0-alpha.0`](CHANGELOG.md:12).
+
+This repository is still experimental, but the shipped runtime is no longer just a ROD↔LTC prototype. The current OTC surface covers ROD swaps against Litecoin, Dogecoin, Bitcoin, and Bitcoin Cash, as reflected in [`CHANGELOG.md`](CHANGELOG.md:12).
 
 ## Experimental disclaimer
 
 > [!WARNING]
 > **Do not treat this project as production-ready.**
-> 
-> The author is **not** a cryptographer, and this work has **not** been externally reviewed. That means there is very likely a fatal flaw somewhere.
-> 
-> This repository is still **highly experimental**, should be treated as a **proof of concept**, and should be used **only for testing**.
-> 
-> It has achieved the ability to perform **fully non-custodial swaps between two Bitcoin-derived blockchains** in its current proof-of-concept form, but it should **not** be used to swap serious amounts.
-> 
-> Proof artifacts and screenshots live under [`proof/`](proof).
+>
+> The author is **not** a cryptographer, and this work has **not** been externally reviewed. There may still be a fatal flaw.
+>
+> This repository should still be treated as **experimental** and used **only for testing**.
+>
+> The current shipped runtime supports fully non-custodial OTC swap flows across ROD and supported Bitcoin-derived counter chains, but it should **not** be used for meaningful value.
+
+Proof artifacts and screenshots live under [`proof/`](proof).
 
 ## Overview
 
-[`rod-web-swap`](README.md) is a static, browser-based, non-custodial SpaceXpanse ROD wallet with an integrated OTC swap engine. Key generation and signing remain inside the browser, while selected chain operations use the SpaceXpanse ROD API and OTC coordination uses the ROD blockchain, Nostr relay messaging, and browser-native adaptor-signature logic.
+[`rod-web-swap`](README.md) is a static, browser-based, non-custodial SpaceXpanse ROD wallet. Key generation and signing remain in the browser. Chain lookups, UTXO discovery, transaction fetch, and broadcast still depend on chain APIs, while OTC coordination uses the ROD blockchain plus Nostr relay messaging.
 
-The OTC subsystem is implemented directly in the main wallet shell through [`js/otc-app-ui.js`](js/otc-app-ui.js), [`js/otc-engine.js`](js/otc-engine.js), [`js/otc-nostr.js`](js/otc-nostr.js), and [`js/otc-swap.js`](js/otc-swap.js). The current runtime includes planned funding txids, pre-signed timelocked refunds, `PREPARED` settlement gating, automated refund monitoring, and persistent in-browser swap recovery, as tracked in [`CHANGELOG.md`](CHANGELOG.md).
+The main OTC runtime lives in [`js/otc-app-ui.js`](js/otc-app-ui.js), [`js/otc-engine.js`](js/otc-engine.js), [`js/otc-swap.js`](js/otc-swap.js), [`js/otc-chains.js`](js/otc-chains.js), [`js/otc-explorer.js`](js/otc-explorer.js), and [`js/otc-nostr.js`](js/otc-nostr.js).
+
+The shipped swap flow includes planned funding txids, pre-signed timelocked refunds, `PREPARED` gating before funding broadcast, automated refund monitoring, and in-browser recovery after reload, as tracked in [`CHANGELOG.md`](CHANGELOG.md:12).
 
 ## What is implemented
 
 ### Wallet
 
 - Local key generation and transaction signing in the browser through [`js/coin.js`](js/coin.js) and [`js/coinbin.js`](js/coinbin.js)
-- ROD wallet send/receive flows in [`index.html`](index.html) and [`js/coinbin.js`](js/coinbin.js)
+- Wallet send/receive flows in [`index.html`](index.html) and [`js/coinbin.js`](js/coinbin.js)
 - Offline transaction decode, verify, rebuild, and sign flows
-- ROD API-backed balance, UTXO, transaction lookup, and broadcast handling through [`coinjs.addressBalance()`](js/coin.js:419), [`coinjs.transaction().listUnspent()`](js/coin.js:1197), [`coinjs.transaction().getTransaction()`](js/coin.js:1239), and [`coinjs.transaction().broadcast()`](js/coin.js:1322)
+- API-backed balance, UTXO, transaction lookup, and broadcast handling through [`coinjs.addressBalance()`](js/coin.js:419), [`coinjs.transaction().listUnspent()`](js/coin.js:1197), [`coinjs.transaction().getTransaction()`](js/coin.js:1239), and [`coinjs.transaction().broadcast()`](js/coin.js:1322)
 - Deterministic local fee guidance rather than remote fee estimation, centered on [`ensureWalletFeeMeetsRelayFloor()`](js/coinbin.js:463)
 - PWA shell support through [`manifest.webmanifest`](manifest.webmanifest) and [`sw.js`](sw.js)
 
-### OTC swap engine
+### OTC runtime
 
-- Serverless browser OTC runtime integrated into [`index.html`](index.html)
-- On-chain order publication/discovery model using the ROD name/value database and optional local RPC/proxy support
+- OTC UI integrated directly into [`index.html`](index.html)
+- On-chain order publication/discovery model using the ROD name/value database with optional local helper/proxy support
 - Nostr-based peer signaling through [`js/otc-nostr.js`](js/otc-nostr.js)
 - Adaptor-signature-based claim flow using [`js/ecdsa-adaptor.js`](js/ecdsa-adaptor.js)
 - Planned funding txids before broadcast
@@ -47,101 +55,92 @@ The OTC subsystem is implemented directly in the main wallet shell through [`js/
 - Confirmation-gated settlement progression
 - Automated refund monitoring and refund terminal states
 - Reload-resilient in-browser swap persistence
-- End-to-end browser proof harness coverage in [`tests/README.md`](tests/README.md) and [`tests/harness/README.md`](tests/harness/README.md)
 
-## Architecture at a glance
+## Wallet and chain scope
 
-The project follows a three-layer model that matches the technical specification in [`docs/technical_specification_rod_web_swap.pdf`](docs/technical_specification_rod_web_swap.pdf):
+The shipped wallet shell exposes ROD, LTC, DOGE, BTC, and BCH in the coin selector in [`index.html`](index.html). ROD remains the primary wallet/network context, while the OTC runtime treats the counter leg as a generic `alt` chain selected from those supported networks.
 
-- **Local browser sandbox / PWA client** — UI, state handling, wallet logic, and cryptographic execution run inside the browser
-- **ROD blockchain layer** — used as the decentralized orderbook and settlement-adjacent coordination layer
-- **Nostr signaling layer** — used for ephemeral peer-to-peer negotiation and swap message exchange
+Current shipped OTC scope:
 
-At repository level, the main entrypoints are:
+- ROD ↔ LTC
+- ROD ↔ DOGE
+- ROD ↔ BTC
+- ROD ↔ BCH
 
-- [`index.html`](index.html) — single-page wallet and OTC shell
-- [`js/coin.js`](js/coin.js) — network constants, signing helpers, transaction logic, and API wrappers
-- [`js/coinbin.js`](js/coinbin.js) — wallet UI controller and transaction flows
-- [`js/otc-app-ui.js`](js/otc-app-ui.js) — OTC dashboard, swap UI, and operator flows
-- [`js/otc-engine.js`](js/otc-engine.js) — OTC orchestration, live session state, API access, and relay/runtime glue
-- [`js/otc-swap.js`](js/otc-swap.js) — deterministic swap/session construction and state transitions
+The explorer/backend adapter layer in [`js/otc-explorer.js`](js/otc-explorer.js) normalizes multiple backend families into one downstream shape:
 
-A durable maintainer summary of the runtime architecture lives in [`docs/maintainer-wiki/concept-architecture-overview.md`](docs/maintainer-wiki/concept-architecture-overview.md).
+- ROD direct API wrappers
+- Esplora-style backends for LTC and BTC
+- BlockCypher-backed DOGE access
+- Blockchair-backed BCH access
 
-## Trust and security model
+## Chain-aware caveats
 
-This repository aims for **non-custodial execution**, not production-grade safety.
+Multi-chain behavior is not interchangeable across all supported networks.
 
-- Private keys are intended to remain in local browser execution paths
-- The wallet is offline-first for signing, but **not fully offline** for balance lookup, UTXO discovery, transaction lookup, broadcast, and OTC coordination
-- OTC coordination is separated from custody, but still depends on chain APIs, Nostr delivery, and optional local RPC/proxy flows for some name/orderbook operations
-- The OTC design is a proof of concept for fully non-custodial swaps across two Bitcoin-derived chains, not a finished protocol product
-
-The technical specification in [`docs/technical_specification_rod_web_swap.pdf`](docs/technical_specification_rod_web_swap.pdf) also highlights important caution areas:
-
-- browser-native adaptor-signature math is intentionally implemented without relying on a compiled `libsecp256k1-zkp` fork
-- legacy big-number code paths may expose timing-side-channel risk in browser environments
-- public coordination/indexing choices create privacy and linkability tradeoffs
-
-These are reasons to keep this project in the **experimental / testing-only** category.
+- Per-chain relay policy, fee floors, dust thresholds, refund timing, and change rules are centralized in [`js/otc-chains.js`](js/otc-chains.js).
+- DOGE has no SegWit support; BTC and LTC support SegWit; BCH uses its own fork-id signing path.
+- BTC and BCH deliberately share Bitcoin legacy version bytes, so address shape alone is not enough to identify the chain. OTC logic must stay bound to hashed `terms.altChain`, not inferred from the address form.
+- Nostr peer messages are not proof of settlement by themselves; signature validation and remote-peer checks are enforced in [`js/otc-nostr.js`](js/otc-nostr.js).
 
 ## Quick start
 
-## Run the wallet
+### Run the wallet
 
-This repository has **no root [`package.json`](package.json)** and no build step for the main application.
+There is no root [`package.json`](package.json) and no build step for the main application.
 
 To run the wallet:
 
 1. Open [`index.html`](index.html) directly in a browser, or
 2. Serve the repository as static files and load [`index.html`](index.html)
 
-Default wallet runtime assumptions:
+Default runtime assumptions:
 
-- ROD API endpoint defaults to `https://api.spacexpanse.org:1234`
+- ROD API base defaults to `https://api.spacexpanse.org:1234`
+- Script-tag ordering in [`index.html`](index.html) is a runtime requirement
 - Donation output is disabled by default
-- Script-tag ordering in [`index.html`](index.html) is a compatibility requirement
 
-## Use OTC mode
+### Use OTC mode
 
-1. Open the OTC tab inside [`index.html`](index.html)
-2. Configure ROD/LTC API endpoints if your environment differs from the defaults
-3. If you want name operations or on-chain orderbook publication through local ROD Core RPC, run the helper described in [`tools/README.md`](tools/README.md)
+1. Open the OTC tab in [`index.html`](index.html)
+2. Select the intended alt chain explicitly
+3. Confirm the chain-specific API/backend settings in OTC Settings
+4. If you need name operations or local order publication through ROD Core RPC, run the helper documented in [`tools/README.md`](tools/README.md)
 
-For the optional helper flow, use [`tools/rod-rpc-cors-proxy.exe`](tools/rod-rpc-cors-proxy.exe) as documented in [`tools/README.md`](tools/README.md).
+The optional helper flow uses [`tools/rod-rpc-cors-proxy.exe`](tools/rod-rpc-cors-proxy.exe) or [`tools/rod-rpc-cors-proxy.js`](tools/rod-rpc-cors-proxy.js) as described in [`tools/README.md`](tools/README.md).
 
 ## Verification and proofs
 
-### Manual/browser verification
+### Fast proof gate
 
-For ordinary wallet and shell changes, load [`index.html`](index.html) in a browser and exercise the affected flow.
+Run [`node unit-browser-test.js`](tests/harness/unit-browser-test.js:1) from [`tests/harness/`](tests/harness).
 
-### OTC proof harness
+This covers fast browser-side invariants for chain constants, explorer normalization, fee/dust policy, terms binding, and related protocol assumptions.
 
-The strongest current OTC verification path is the real-browser harness documented in:
+### Full harness
 
-- [`tests/README.md`](tests/README.md)
-- [`tests/harness/README.md`](tests/harness/README.md)
+Run [`bash tests/harness/run-all.sh`](tests/harness/run-all.sh:1) from the workspace root after installing harness dependencies in [`tests/harness/package.json`](tests/harness/package.json).
 
-That harness runs the real app in two browser contexts against mock ROD/LTC backends and a local Nostr relay, and validates broadcast transactions independently.
+The matrix runner executes happy-path, ROD-refund, alt-refund, and reload scenarios across LTC, DOGE, BTC, and BCH using the real unmodified app in headless Chromium against mock chains that independently re-verify every broadcast.
+
+### Windows / local runner notes
+
+- [`tests/harness/run-all.sh`](tests/harness/run-all.sh:1) resolves Node via `node`, `node.exe`, or `NODE_BIN`.
+- [`tests/harness/unit-browser-test.js`](tests/harness/unit-browser-test.js:1) and [`tests/harness/e2e-swap-test.js`](tests/harness/e2e-swap-test.js:1) accept `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` or `PW_CHROMIUM_EXECUTABLE_PATH` if Chromium is not found through the default Playwright location.
+- On Windows hosts where checked-in CRLF line endings block `bash`, run the full harness through a temporary LF-normalized copy rather than rewriting the tracked script.
 
 ### Visual proof artifacts
 
-Screenshots and proof artifacts are available under [`proof/`](proof), including:
+Screenshots and proof artifacts are available under [`proof/`](proof), including [`proof/orderbook.jpg`](proof/orderbook.jpg), [`proof/active-swap-detail.jpg`](proof/active-swap-detail.jpg), [`proof/ltc-wallet.jpg`](proof/ltc-wallet.jpg), and [`proof/rod-wallet.jpg`](proof/rod-wallet.jpg).
 
-- [`proof/active-swap-detail.jpg`](proof/active-swap-detail.jpg)
-- [`proof/ltc-wallet.jpg`](proof/ltc-wallet.jpg)
-- [`proof/rod-wallet.jpg`](proof/rod-wallet.jpg)
+## Current limitations
 
-## Current limitations and caveats
-
-- This work is a proof of concept and has **not** been cryptographically reviewed
-- Live OTC success still depends on reliable API and relay behavior
-- Some OTC orderbook/name operations depend on the optional local RPC/proxy path described in [`tools/README.md`](tools/README.md)
+- This project remains experimental and has not been cryptographically reviewed
+- Live OTC success still depends on working chain APIs and relay delivery
+- Some name/orderbook operations still depend on the optional local RPC/proxy path in [`tools/README.md`](tools/README.md)
 - Script-tag ordering in [`index.html`](index.html) must remain intact
-- PWA shell integrity depends on keeping [`sw.js`](sw.js) aligned with actual cached assets
-- ROD API response handling is tailored to the current `{result,error}` envelope behavior
-- This project should be used for **testing**, not for real trading of meaningful value
+- PWA shell integrity depends on keeping [`sw.js`](sw.js) aligned with cached assets
+- ROD API response handling expects the current `{result,error}` envelope behavior
 
 ## Repository structure
 
@@ -152,10 +151,13 @@ Screenshots and proof artifacts are available under [`proof/`](proof), including
 │  ├─ coin.js
 │  ├─ coinbin.js
 │  ├─ otc-app-ui.js
+│  ├─ otc-chains.js
 │  ├─ otc-engine.js
+│  ├─ otc-explorer.js
 │  ├─ otc-nostr.js
 │  └─ otc-swap.js
 ├─ tests/
+│  └─ harness/
 ├─ tools/
 ├─ docs/
 ├─ proof/
@@ -165,21 +167,18 @@ Screenshots and proof artifacts are available under [`proof/`](proof), including
 
 ## Further reading
 
-- Release history and verified behavior: [`CHANGELOG.md`](CHANGELOG.md)
-- Durable maintainer architecture notes: [`docs/maintainer-wiki/concept-architecture-overview.md`](docs/maintainer-wiki/concept-architecture-overview.md)
-- Carbon Memory index: [`docs/maintainer-wiki/index.md`](docs/maintainer-wiki/index.md)
-- Technical specification: [`docs/technical_specification_rod_web_swap.pdf`](docs/technical_specification_rod_web_swap.pdf)
-- OTC proof harness: [`tests/README.md`](tests/README.md) and [`tests/harness/README.md`](tests/harness/README.md)
+- Release history and shipped behavior: [`CHANGELOG.md`](CHANGELOG.md)
+- OTC proof harness docs: [`tests/README.md`](tests/README.md) and [`tests/harness/README.md`](tests/harness/README.md)
 - Optional RPC helper: [`tools/README.md`](tools/README.md)
+- Technical specification: [`docs/technical_specification_rod_web_swap.pdf`](docs/technical_specification_rod_web_swap.pdf)
+- Durable maintainer docs: [`docs/maintainer-wiki/index.md`](docs/maintainer-wiki/index.md)
 
 ## Attribution
 
-This project is derived from the browser-wallet lineage represented by [`coinbin`](README.md), but the current repository behavior should be understood through the SpaceXpanse ROD runtime, OTC modules, and repository-specific documentation linked above.
+This project is derived from the browser-wallet lineage represented by [`coinbin`](README.md), but current behavior should be understood through the SpaceXpanse ROD runtime, shipped OTC modules, and the repository-specific documentation linked above.
 
 ## Licensing
 
 - Original Coinb.in-derived material in this repository remains under the MIT license in [`LICENSE`](LICENSE).
 - SpaceXpanse/ROD fork-specific additions are licensed under Apache License 2.0 in [`LICENSE-APACHE`](LICENSE-APACHE), unless a file states otherwise.
-- Repository distributions should preserve both [`LICENSE`](LICENSE) and [`LICENSE-APACHE`](LICENSE-APACHE) so the mixed licensing scope remains clear.
-- File-level SPDX headers and notices control more specific cases where present.
-
+- Repository distributions should preserve both [`LICENSE`](LICENSE) and [`LICENSE-APACHE`](LICENSE-APACHE).

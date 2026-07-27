@@ -1,10 +1,10 @@
 ---- Version 2.8.0-alpha.0 2026.07.27 ----
 7b6bffbb5ef362c308f22a64fa6ab69a26f48c92  ./.gitignore
 212d797d23ac63499e3ef8d34e95d5f5377b8992  ./AGENTS.md
-f097bab4b0b03ad05e5afbcf1c33c173100c14ed  ./CHANGELOG.md
+773bb3d8533f65a087421d4eec0ec6b0d40f404d  ./CHANGELOG.md
 e67f343a11165846df280eb195c401b6fc563b77  ./CLAUDE.md
 d55948fda8f4ee2109f89250b39a360d6cd45670  ./LICENSE
-b5f723a87456681acbfba87f2fecce4a61114447  ./README.md
+4230e631cacb975c173c162b3d498e79c34dde18  ./README.md
 dddbf1fa43a8146392ac6f98256290e16328e24e  ./_headers
 fd972eb9115f52a00edcf6354ce44fcee48ce986  ./css/bootstrap-datetimepicker.min.css
 c277f5dc2e08fa885e401ee367ac6c0eefa7a6dc  ./css/bootstrap-theme.min.css
@@ -81,7 +81,7 @@ bb3a72b8349ec668623effef0d7c4a669c544251  ./tests/harness/e2e-swap-test.js
 698502821914eea4f0b7a814f0f6365be24b2b19  ./tests/harness/mock-infra.js
 faa51841445a7caebf24447575819c87842c9269  ./tests/harness/package.json
 ea08f6e28f3d5e8023e73c8d146d634d9f831eff  ./tests/harness/run-all.sh
-ca28dd44d52f72a9ad8334320663c0322d9ebee4  ./tests/harness/unit-browser-test.js
+95780ea28b5d08b454752743c21acb774915b6c8  ./tests/harness/unit-browser-test.js
 c627e922fc2734e07a8fd6af5f2bdc94d0372161  ./tools/README.md
 fcfed6847374ffba8f4922325534c0feba62dd94  ./tools/package-lock.json
 f8e2436a44e38eaa86f3ccae2f0d78594a82983f  ./tools/package.json

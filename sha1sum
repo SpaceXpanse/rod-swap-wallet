@@ -1,7 +1,7 @@
----- Version 2.7.1-alpha.0 2026.07.27 ----
+---- Version 2.8.0-alpha.0 2026.07.27 ----
 7b6bffbb5ef362c308f22a64fa6ab69a26f48c92  ./.gitignore
 212d797d23ac63499e3ef8d34e95d5f5377b8992  ./AGENTS.md
-573e35190c6dfdfb092b012d8e994080c4b305ec  ./CHANGELOG.md
+f097bab4b0b03ad05e5afbcf1c33c173100c14ed  ./CHANGELOG.md
 e67f343a11165846df280eb195c401b6fc563b77  ./CLAUDE.md
 d55948fda8f4ee2109f89250b39a360d6cd45670  ./LICENSE
 b5f723a87456681acbfba87f2fecce4a61114447  ./README.md
@@ -71,8 +71,8 @@ fad26c13a5c8e1bb4cf7071824cd5fa22b100cc6  ./js/qrcode.js
 146e19d9aaec92c4d15606847b3a95020eca1484  ./js/ripemd160.js
 038060048c602d268b0575a5e68e87611ac3ee05  ./js/sha512.js
 950895fee660f675bd491470621139b9a6421f7c  ./js/transition.js
-2cec62ef9ad7ec36580ae5442d4d0005a1b33593  ./manifest.webmanifest
-fed67fda3f7b06b7e3a05987b43afb383d68f12b  ./sw.js
+fbe4438667d596ea4797016ee896c5a339c4ec3a  ./manifest.webmanifest
+23cacd249de61e700745e19d889874eac8857454  ./sw.js
 19fcd3b119403a5337f2e7d324f12f3e073387fd  ./tests/README.md
 57d640da279c50b36675d44a892ccbf356e8e74e  ./tests/harness/README.md
 9767a7238024fcec63ceb1648e8ac1feb595c656  ./tests/harness/e2e-report-happy.json

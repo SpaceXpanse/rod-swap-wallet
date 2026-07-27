@@ -1,4 +1,4 @@
----- Version 2.4.0-alpha.0 2026.07.24 ----
+---- Version 2.7.1-alpha.0 2026.07.27 ----
 7b6bffbb5ef362c308f22a64fa6ab69a26f48c92  ./.gitignore
 212d797d23ac63499e3ef8d34e95d5f5377b8992  ./AGENTS.md
 573e35190c6dfdfb092b012d8e994080c4b305ec  ./CHANGELOG.md
@@ -71,15 +71,17 @@ fad26c13a5c8e1bb4cf7071824cd5fa22b100cc6  ./js/qrcode.js
 146e19d9aaec92c4d15606847b3a95020eca1484  ./js/ripemd160.js
 038060048c602d268b0575a5e68e87611ac3ee05  ./js/sha512.js
 950895fee660f675bd491470621139b9a6421f7c  ./js/transition.js
-75d0bb0c2e9a8357738bd09a7ea730b92f03066d  ./manifest.webmanifest
-d431e38c89fd64d1110abb6638297c047ce142ed  ./sw.js
+2cec62ef9ad7ec36580ae5442d4d0005a1b33593  ./manifest.webmanifest
+fed67fda3f7b06b7e3a05987b43afb383d68f12b  ./sw.js
 19fcd3b119403a5337f2e7d324f12f3e073387fd  ./tests/README.md
 57d640da279c50b36675d44a892ccbf356e8e74e  ./tests/harness/README.md
 9767a7238024fcec63ceb1648e8ac1feb595c656  ./tests/harness/e2e-report-happy.json
 5c2bc25bb7e3f696c593b132115a69db062eff2e  ./tests/harness/e2e-report-refund.json
-ef6a5a03cf152b72c63ef50c73845f188bf32ad8  ./tests/harness/e2e-swap-test.js
+bb3a72b8349ec668623effef0d7c4a669c544251  ./tests/harness/e2e-swap-test.js
 698502821914eea4f0b7a814f0f6365be24b2b19  ./tests/harness/mock-infra.js
 faa51841445a7caebf24447575819c87842c9269  ./tests/harness/package.json
+ea08f6e28f3d5e8023e73c8d146d634d9f831eff  ./tests/harness/run-all.sh
+ca28dd44d52f72a9ad8334320663c0322d9ebee4  ./tests/harness/unit-browser-test.js
 c627e922fc2734e07a8fd6af5f2bdc94d0372161  ./tools/README.md
 fcfed6847374ffba8f4922325534c0feba62dd94  ./tools/package-lock.json
 f8e2436a44e38eaa86f3ccae2f0d78594a82983f  ./tools/package.json

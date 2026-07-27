@@ -9,6 +9,7 @@
  *   node unit-browser-test.js
  */
 'use strict';
+const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 const { staticServer } = require('./mock-infra');
@@ -23,9 +24,23 @@ function step(name, ok, detail) {
   if (!ok) results.ok = false;
 }
 
+function resolveChromiumLaunchOptions() {
+  const configuredExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.PW_CHROMIUM_EXECUTABLE_PATH;
+  if (configuredExecutablePath) {
+    return { executablePath: configuredExecutablePath };
+  }
+
+  const pinnedExecutablePath = '/opt/pw-browsers/chromium';
+  if (fs.existsSync(pinnedExecutablePath)) {
+    return { executablePath: pinnedExecutablePath };
+  }
+
+  return {};
+}
+
 async function main() {
   const app = await staticServer(APP_DIR, PORT);
-  const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
+  const browser = await chromium.launch(resolveChromiumLaunchOptions());
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));

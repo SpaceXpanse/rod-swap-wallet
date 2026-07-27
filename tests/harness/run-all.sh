@@ -10,6 +10,18 @@ cd "$(dirname "$0")"
 
 FAILED=0
 RESULTS=()
+NODE_BIN="${NODE_BIN:-}"
+
+if [ -z "$NODE_BIN" ]; then
+  if command -v node >/dev/null 2>&1; then
+    NODE_BIN="$(command -v node)"
+  elif command -v node.exe >/dev/null 2>&1; then
+    NODE_BIN="$(command -v node.exe)"
+  else
+    echo "node not found in PATH; set NODE_BIN to a Node executable"
+    exit 127
+  fi
+fi
 
 record() {
   local label="$1" code="$2"
@@ -27,14 +39,14 @@ run() {
   echo "=============================================================="
   echo ">>> $label"
   echo "=============================================================="
-  env "$@" node e2e-swap-test.js 2>&1 | grep -v 'console.error'
+  env "$@" "$NODE_BIN" e2e-swap-test.js 2>&1 | grep -v 'console.error'
   record "$label" "${PIPESTATUS[0]}"
 }
 
 echo "=============================================================="
 echo ">>> unit: chain layer, policy, fees, invariants"
 echo "=============================================================="
-node unit-browser-test.js
+"$NODE_BIN" unit-browser-test.js
 record "unit: chain layer, policy, fees, invariants" $?
 
 for CHAIN in LTC DOGE BTC BCH; do

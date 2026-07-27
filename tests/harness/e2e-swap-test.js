@@ -34,6 +34,7 @@
  * requires the swap to still complete (persistence + relay replay).
  */
 'use strict';
+const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 const { MockChain, rodApiServer, esploraServer, blockcypherServer, blockchairServer, nostrRelay, staticServer } = require('./mock-infra');
@@ -113,6 +114,20 @@ function step(name, ok, detail) {
   if (!ok) results.ok = false;
 }
 
+function resolveChromiumLaunchOptions() {
+  const configuredExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.PW_CHROMIUM_EXECUTABLE_PATH;
+  if (configuredExecutablePath) {
+    return { executablePath: configuredExecutablePath };
+  }
+
+  const pinnedExecutablePath = '/opt/pw-browsers/chromium';
+  if (fs.existsSync(pinnedExecutablePath)) {
+    return { executablePath: pinnedExecutablePath };
+  }
+
+  return {};
+}
+
 async function waitFor(fn, timeoutMs, label) {
   const start = Date.now();
   for (;;) {
@@ -136,7 +151,7 @@ async function main() {
 
   const rodConfirmationsCfg = SCENARIO === 'refund' ? 3 : 1;
 
-  const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
+  const browser = await chromium.launch(resolveChromiumLaunchOptions());
   const mkContext = async (label) => {
     const ctx = await browser.newContext({ serviceWorkers: 'block' });
     await ctx.addInitScript(({ rodPort, altPort, relayPort, rodConfs, altCode, altType, altPath, altRefundBlocks }) => {
@@ -317,7 +332,6 @@ async function main() {
     await runRefundPath();
   }
 
-  const fs = require('fs');
   fs.writeFileSync(path.join(__dirname, `e2e-report-${ALT.toLowerCase()}-${SCENARIO}.json`), JSON.stringify({
     scenario: SCENARIO,
     swapId,

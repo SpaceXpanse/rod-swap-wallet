@@ -7,10 +7,18 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const manifestName = 'SHA256SUMS';
+const releaseDirectories = new Set(['css', 'fonts', 'images', 'js', 'tools']);
+
+function inReleaseInventory(relativePath) {
+	const normalized = relativePath.replace(/\\/g, '/');
+	if (!normalized.includes('/')) return true;
+	return releaseDirectories.has(normalized.split('/')[0]);
+}
 
 function excluded(relativePath) {
 	const normalized = relativePath.replace(/\\/g, '/');
-	return normalized === manifestName ||
+	return !inReleaseInventory(normalized) ||
+		normalized === manifestName ||
 		normalized === 'sha1sum' ||
 		normalized.startsWith('.git/') ||
 		normalized.includes('/node_modules/') ||

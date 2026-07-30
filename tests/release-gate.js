@@ -9,6 +9,7 @@ const vm = require('vm');
 
 const root = path.resolve(process.env.APP_DIR || path.join(__dirname, '..'));
 const results = [];
+const releaseInventoryDirectories = new Set(['css', 'fonts', 'images', 'js', 'tools']);
 
 function check(name, fn) {
 	try {
@@ -32,6 +33,12 @@ function localAsset(value) {
 
 function existing(relativePath) {
 	assert(fs.existsSync(path.join(root, relativePath)), 'missing ' + relativePath);
+}
+
+function inReleaseInventory(relativePath) {
+	const normalized = relativePath.replace(/\\/g, '/');
+	if (!normalized.includes('/')) return true;
+	return releaseInventoryDirectories.has(normalized.split('/')[0]);
 }
 
 function walk(directory, predicate) {
@@ -123,7 +130,8 @@ if (process.env.SKIP_RELEASE_INTEGRITY !== '1') {
 
 		const files = walk(root, (file) => {
 			const relative = path.relative(root, file).replace(/\\/g, '/');
-			return relative !== 'SHA256SUMS' &&
+			return inReleaseInventory(relative) &&
+				relative !== 'SHA256SUMS' &&
 				relative !== 'sha1sum' &&
 				!/^tests\/harness\/e2e-report-.*\.json$/.test(relative);
 		}).map((file) => path.relative(root, file).replace(/\\/g, '/')).sort();

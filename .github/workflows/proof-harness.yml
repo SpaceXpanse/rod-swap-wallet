@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 18
       - name: Run deterministic release gates
-        run: chmod +x tests/run-fast.sh && bash tests/run-fast.sh
+        run: chmod +x tests/run-fast.shm && chmod +x tests/harness/run-all.sh && bash tests/run-fast.sh
 
   browser-settlement:
     name: Chromium and settlement matrix

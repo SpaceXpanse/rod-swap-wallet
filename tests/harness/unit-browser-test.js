@@ -31,6 +31,12 @@ function launchOptions() {
 		args = JSON.parse(process.env.PLAYWRIGHT_CHROMIUM_ARGS_JSON);
 		if (!Array.isArray(args)) throw new Error('PLAYWRIGHT_CHROMIUM_ARGS_JSON must be a JSON array');
 	}
+	const unsafe = (args || []).find((arg) => /^--single-process(?:=|$)/.test(String(arg)));
+	if (unsafe) {
+		throw new Error(
+			'Unsafe Chromium argument ' + unsafe + ': --single-process invalidates browser-context isolation'
+		);
+	}
 	if (configured) return { executablePath: configured, args };
 	if (fs.existsSync('/opt/pw-browsers/chromium')) {
 		return { executablePath: '/opt/pw-browsers/chromium', args };

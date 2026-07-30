@@ -11,6 +11,7 @@ FAILED=0
 RESULTS=()
 NODE_BIN="${NODE_BIN:-}"
 SUPPORTED_SWAP_CHAINS=(LTC DOGE)
+DOGE_ROD_REFUND_REPEATS="${DOGE_ROD_REFUND_REPEATS:-3}"
 
 if [ -z "$NODE_BIN" ]; then
   if command -v node >/dev/null 2>&1; then
@@ -21,6 +22,11 @@ if [ -z "$NODE_BIN" ]; then
     echo "node not found in PATH; set NODE_BIN to a Node executable"
     exit 127
   fi
+fi
+
+if ! [[ "$DOGE_ROD_REFUND_REPEATS" =~ ^[1-9][0-9]*$ ]] || [ "$DOGE_ROD_REFUND_REPEATS" -gt 20 ]; then
+  echo "DOGE_ROD_REFUND_REPEATS must be an integer from 1 through 20"
+  exit 64
 fi
 
 record() {
@@ -71,6 +77,11 @@ else
     echo ""
     echo "tests/harness/node_modules is missing; run npm ci in tests/harness"
     record "browser dependency preflight" 1
+  elif [[ "${PLAYWRIGHT_CHROMIUM_ARGS_JSON:-}" == *"--single-process"* ]]; then
+    echo ""
+    echo "PLAYWRIGHT_CHROMIUM_ARGS_JSON contains --single-process."
+    echo "That mode invalidates Alice/Bob isolation and can manufacture protocol deadlocks."
+    record "browser isolation preflight" 1
   else
     run_node "real-browser wiring + offline PWA shell" unit-browser-test.js
 
@@ -80,6 +91,13 @@ else
       run_e2e "e2e $CHAIN alt-leg refund"   ALT_CHAIN="$CHAIN" SCENARIO=altrefund
       run_e2e "e2e $CHAIN reload recovery"  ALT_CHAIN="$CHAIN" SCENARIO=happy RELOAD_TEST=1
     done
+
+    if [ "$DOGE_ROD_REFUND_REPEATS" -gt 1 ]; then
+      for ((RUN=2; RUN<=DOGE_ROD_REFUND_REPEATS; RUN++)); do
+        run_e2e "stress DOGE ROD-leg refund $RUN/$DOGE_ROD_REFUND_REPEATS" \
+          ALT_CHAIN=DOGE SCENARIO=refund HARNESS_REPEAT_INDEX="$RUN"
+      done
+    fi
   fi
 fi
 

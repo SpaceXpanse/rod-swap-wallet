@@ -34,6 +34,7 @@
  * requires the swap to still complete (persistence + relay replay).
  */
 'use strict';
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
@@ -41,6 +42,8 @@ const { MockChain, rodApiServer, esploraServer, blockcypherServer, nostrRelay, s
 
 const APP_DIR = process.env.APP_DIR || path.resolve(__dirname, '..', '..');
 const SCENARIO = process.env.SCENARIO || 'happy';
+const HARNESS_REPEAT_INDEX = process.env.HARNESS_REPEAT_INDEX || '';
+const REPORT_REPEAT_SUFFIX = HARNESS_REPEAT_INDEX ? `-repeat-${HARNESS_REPEAT_INDEX}` : '';
 /* Which chain the counter leg runs on. Everything below is derived from this,
    so the identical proof runs against Litecoin-over-Esplora and
    Dogecoin-over-BlockCypher — different version bytes, different fee and dust
@@ -94,6 +97,10 @@ const ROD_CLAIM_FEE = 51900;
 const ALT_CLAIM_FEE = ALT_PROFILE.claimFee;
 const ROD_REFUND_FEE = 51900;
 const ALT_AMOUNT_SATS = Math.round(parseFloat(ALT_AMOUNT) * 1e8);
+const PROTOCOL_STAGE_TIMEOUT_MS = Number(process.env.PROTOCOL_STAGE_TIMEOUT_MS || 45000);
+if (!Number.isSafeInteger(PROTOCOL_STAGE_TIMEOUT_MS) || PROTOCOL_STAGE_TIMEOUT_MS < 5000) {
+  throw new Error('PROTOCOL_STAGE_TIMEOUT_MS must be an integer of at least 5000');
+}
 
 const results = { steps: [], ok: true };
 const runtime = {
@@ -121,6 +128,16 @@ function expectedTransientApiResponse(urlValue, status) {
     /^\/txs\/[0-9a-f]{64}$/i.test(url.pathname);
 }
 
+function rejectUnsafeChromiumArgs(args) {
+  const unsafe = (args || []).find((arg) => /^--single-process(?:=|$)/.test(String(arg)));
+  if (unsafe) {
+    throw new Error(
+      `Unsafe Chromium argument ${unsafe}: --single-process can share state between ` +
+      'the Alice and Bob test contexts and manufacture protocol deadlocks'
+    );
+  }
+}
+
 function resolveChromiumLaunchOptions() {
   const configuredExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.PW_CHROMIUM_EXECUTABLE_PATH;
   let args;
@@ -128,6 +145,7 @@ function resolveChromiumLaunchOptions() {
     args = JSON.parse(process.env.PLAYWRIGHT_CHROMIUM_ARGS_JSON);
     if (!Array.isArray(args)) throw new Error('PLAYWRIGHT_CHROMIUM_ARGS_JSON must be a JSON array');
   }
+  rejectUnsafeChromiumArgs(args);
   if (configuredExecutablePath) {
     return { executablePath: configuredExecutablePath, args };
   }
@@ -150,13 +168,148 @@ async function waitFor(fn, timeoutMs, label) {
   }
 }
 
+async function sessionProtocolState(page, swapId) {
+  return page.evaluate((id) => {
+    const s = rodOtc.engine.restoreLive(id);
+    if (!s) return { exists: false };
+    return {
+      exists: true,
+      role: s.role || '',
+      state: s.state || '',
+      localAccepted: !!s.localAccepted,
+      remoteAccepted: !!s.remoteAccepted,
+      bilateralReady: !!s.bilateralReady,
+      adaptorPoint: s.adaptorPoint || '',
+      plannedRodFunding: !!(s.plannedRodFunding && s.plannedRodFunding.txid),
+      plannedAltFunding: !!(s.plannedAltFunding && s.plannedAltFunding.txid),
+      rodRefundLocalSig: !!(s.rodRefund && s.rodRefund.localSig),
+      rodRefundSigned: !!(s.rodRefund && s.rodRefund.signedHex),
+      rodRefundCosigned: !!s.rodRefundCosigned,
+      altRefundLocalSig: !!(s.altRefund && s.altRefund.localSig),
+      altRefundSigned: !!(s.altRefund && s.altRefund.signedHex),
+      altRefundCosigned: !!s.altRefundCosigned,
+      localRodAdaptorSignature: !!s.localRodAdaptorSignature,
+      remoteRodAdaptorSignature: !!s.remoteRodAdaptorSignature,
+      localAltAdaptorSignature: !!s.localAltAdaptorSignature,
+      remoteAltAdaptorSignature: !!s.remoteAltAdaptorSignature,
+      localPrepared: !!s.localPrepared,
+      remotePrepared: !!s.remotePrepared,
+      pending: {
+        rodRefundSig: !!s._pendingRodRefundSig,
+        rodRefundCosig: !!s._pendingRodRefundCosig,
+        altRefundSig: !!s._pendingAltRefundSig,
+        altRefundCosig: !!s._pendingAltRefundCosig,
+        rodAdaptorSig: !!s._pendingRodAdaptorSig,
+        altAdaptorSig: !!s._pendingAltAdaptorSig
+      }
+    };
+  }, swapId);
+}
+
+function relayDiagnostics(swapId) {
+  const byType = {};
+  const byPubkey = {};
+  const events = runtime.relay && Array.isArray(runtime.relay.events) ? runtime.relay.events : [];
+  for (const event of events) {
+    let envelope;
+    try { envelope = JSON.parse(event.content); } catch (error) { continue; }
+    if (swapId && envelope.swapId !== swapId) continue;
+    const type = envelope.type || 'unknown';
+    const pubkey = event.pubkey || 'missing';
+    byType[type] = (byType[type] || 0) + 1;
+    byPubkey[pubkey] = (byPubkey[pubkey] || 0) + 1;
+  }
+  return { total: Object.values(byType).reduce((sum, count) => sum + count, 0), byType, byPubkey };
+}
+
+function missingPreparedPrerequisites(session) {
+  if (!session) return ['session'];
+  const missing = [];
+  const need = (condition, name) => { if (!condition) missing.push(name); };
+  need(session.localAccepted, 'localAccepted');
+  need(session.remoteAccepted, 'remoteAccepted');
+  need(session.bilateralReady, 'bilateralReady');
+  need(session.adaptorPoint, 'adaptorPoint');
+  need(session.plannedRodFunding, 'plannedRodFunding');
+  need(session.plannedAltFunding, 'plannedAltFunding');
+  if (session.role === 'seller') {
+    need(session.rodRefundSigned, 'rodRefund.signedHex');
+    need(session.altRefundCosigned, 'altRefundCosigned');
+    need(session.localRodAdaptorSignature, 'localRodAdaptorSignature');
+    need(session.remoteAltAdaptorSignature, 'remoteAltAdaptorSignature');
+  } else if (session.role === 'buyer') {
+    need(session.altRefundSigned, 'altRefund.signedHex');
+    need(session.rodRefundCosigned, 'rodRefundCosigned');
+    need(session.localAltAdaptorSignature, 'localAltAdaptorSignature');
+    need(session.remoteRodAdaptorSignature, 'remoteRodAdaptorSignature');
+  } else {
+    missing.push('valid role');
+  }
+  need(session.localPrepared, 'localPrepared');
+  return missing;
+}
+
+async function waitForProtocolStage(label, predicate, timeoutMs) {
+  const deadline = timeoutMs || PROTOCOL_STAGE_TIMEOUT_MS;
+  const startedAt = Date.now();
+  try {
+    const state = await waitFor(async () => {
+      const [aliceState, bobState] = await Promise.all([
+        sessionProtocolState(runtime.alice, runtime.swapId),
+        sessionProtocolState(runtime.bob, runtime.swapId)
+      ]);
+      return predicate(aliceState, bobState) ? { alice: aliceState, bob: bobState } : null;
+    }, deadline, `protocol stage "${label}"`);
+    step(`protocol stage: ${label}`, true, `${Date.now() - startedAt} ms`);
+    return state;
+  } catch (error) {
+    let aliceState = null;
+    let bobState = null;
+    try { aliceState = await sessionProtocolState(runtime.alice, runtime.swapId); } catch (diagnosticError) {}
+    try { bobState = await sessionProtocolState(runtime.bob, runtime.swapId); } catch (diagnosticError) {}
+    error.message += '\nProtocol stage: ' + label;
+    error.message += '\nAlice missing: ' + JSON.stringify(missingPreparedPrerequisites(aliceState));
+    error.message += '\nBob missing: ' + JSON.stringify(missingPreparedPrerequisites(bobState));
+    error.message += '\nAlice protocol state: ' + JSON.stringify(aliceState);
+    error.message += '\nBob protocol state: ' + JSON.stringify(bobState);
+    error.message += '\nRelay diagnostics: ' + JSON.stringify(relayDiagnostics(runtime.swapId));
+    step(`protocol stage: ${label}`, false, `${Date.now() - startedAt} ms`);
+    throw error;
+  }
+}
+
 async function sessionDiagnostics(page, swapId) {
   return page.evaluate((id) => {
     const session = rodOtc.engine.restoreLive(id);
+    const bool = (value) => !!value;
+    const funding = (value) => value ? {
+      txid: value.txid || '',
+      vout: value.vout,
+      value: value.value,
+      amount: value.amount,
+      hasTxhex: !!value.txhex
+    } : null;
+    const refund = (value) => value ? {
+      lockHeight: value.lockHeight,
+      txid: value.txid || '',
+      hasLocalSig: !!value.localSig,
+      hasRemoteSig: !!value.remoteSig,
+      hasSignedHex: !!value.signedHex
+    } : null;
+    const pending = session ? {
+      rodRefundSig: bool(session._pendingRodRefundSig),
+      rodRefundCosig: bool(session._pendingRodRefundCosig),
+      altRefundSig: bool(session._pendingAltRefundSig),
+      altRefundCosig: bool(session._pendingAltRefundCosig),
+      rodAdaptorSig: bool(session._pendingRodAdaptorSig),
+      altAdaptorSig: bool(session._pendingAltAdaptorSig)
+    } : {};
     return {
       flash: $('#otcFlash').text(),
       eventLog: $('#otcLog').text(),
+      contextId: localStorage.getItem('rodOtcHarnessContextId') || '',
       session: session ? {
+        role: session.role || '',
         state: session.state,
         localAccepted: !!session.localAccepted,
         remoteAccepted: !!session.remoteAccepted,
@@ -164,18 +317,78 @@ async function sessionDiagnostics(page, swapId) {
         localPrepared: !!session.localPrepared,
         remotePrepared: !!session.remotePrepared,
         hasAdaptorPoint: !!session.adaptorPoint,
-        hasRodRefund: !!(session.rodRefund && session.rodRefund.signedHex),
-        hasAltRefund: !!(session.altRefund && session.altRefund.signedHex),
+        plannedRodFunding: funding(session.plannedRodFunding),
+        plannedAltFunding: funding(session.plannedAltFunding),
+        rodRefund: refund(session.rodRefund),
+        altRefund: refund(session.altRefund),
+        rodRefundCosigned: !!session.rodRefundCosigned,
+        altRefundCosigned: !!session.altRefundCosigned,
         hasLocalRodAdaptorSignature: !!session.localRodAdaptorSignature,
         hasRemoteRodAdaptorSignature: !!session.remoteRodAdaptorSignature,
         hasLocalAltAdaptorSignature: !!session.localAltAdaptorSignature,
         hasRemoteAltAdaptorSignature: !!session.remoteAltAdaptorSignature,
+        pending,
+        localNostrPubkey: session.localNostrPubkey || '',
+        remoteNostrPubkey: session.remoteNostrPubkey || '',
+        sellerIdentity: session.terms && session.terms.seller || '',
+        buyerIdentity: session.terms && session.terms.buyer || '',
         refundSafetyFault: session._refundSafetyFault || '',
         automationErrors: session._automationErrors || {},
+        timeline: session.timeline || [],
         log: session._log || []
       } : null
     };
   }, swapId);
+}
+
+async function assertContextStorageIsolation(alice, bob, aliceContextId, bobContextId) {
+  const aliceProbe = 'alice-' + crypto.randomBytes(12).toString('hex');
+  const bobProbe = 'bob-' + crypto.randomBytes(12).toString('hex');
+
+  await alice.evaluate((value) => localStorage.setItem('rodOtcHarnessIsolationProbe', value), aliceProbe);
+  const bobSawAlice = await bob.evaluate(() => localStorage.getItem('rodOtcHarnessIsolationProbe'));
+  await alice.evaluate(() => localStorage.removeItem('rodOtcHarnessIsolationProbe'));
+
+  await bob.evaluate((value) => localStorage.setItem('rodOtcHarnessIsolationProbe', value), bobProbe);
+  const aliceSawBob = await alice.evaluate(() => localStorage.getItem('rodOtcHarnessIsolationProbe'));
+  await bob.evaluate(() => localStorage.removeItem('rodOtcHarnessIsolationProbe'));
+
+  const [aliceId, bobId] = await Promise.all([
+    alice.evaluate(() => localStorage.getItem('rodOtcHarnessContextId')),
+    bob.evaluate(() => localStorage.getItem('rodOtcHarnessContextId'))
+  ]);
+  if (bobSawAlice !== null || aliceSawBob !== null ||
+      aliceId !== aliceContextId || bobId !== bobContextId || aliceId === bobId) {
+    throw new Error('Browser context isolation preflight failed: Alice and Bob do not have independent localStorage');
+  }
+  step('Alice and Bob browser storage is isolated', true);
+}
+
+async function assertPeerIdentityIsolation(alice, bob, aliceWallet, bobWallet, aliceXpub, bobXpub) {
+  const identityFor = (page, wallet) => page.evaluate((wif) => {
+    const identity = rodOtc.nostr.identityFromWif(wif);
+    return {
+      nostrPubkey: identity.pubkey || '',
+      contextId: localStorage.getItem('rodOtcHarnessContextId') || '',
+      liveSwapCount: Object.keys(rodOtc.engine.loadLive()).length
+    };
+  }, wallet.wif);
+  const [aliceIdentity, bobIdentity] = await Promise.all([
+    identityFor(alice, aliceWallet),
+    identityFor(bob, bobWallet)
+  ]);
+  const isolated =
+    aliceWallet.address !== bobWallet.address &&
+    aliceWallet.wif !== bobWallet.wif &&
+    aliceXpub && bobXpub && aliceXpub !== bobXpub &&
+    aliceIdentity.nostrPubkey && bobIdentity.nostrPubkey &&
+    aliceIdentity.nostrPubkey !== bobIdentity.nostrPubkey &&
+    aliceIdentity.contextId !== bobIdentity.contextId &&
+    aliceIdentity.liveSwapCount === 0 && bobIdentity.liveSwapCount === 0;
+  if (!isolated) {
+    throw new Error('Peer identity isolation preflight failed: wallet, xpub, Nostr key, or session state is shared');
+  }
+  step('Alice and Bob wallet, xpub, Nostr identity, and initial session state are isolated', true);
 }
 
 async function main() {
@@ -197,8 +410,9 @@ async function main() {
   const browser = await chromium.launch(resolveChromiumLaunchOptions());
   runtime.browser = browser;
   const mkContext = async (label) => {
+    const contextId = `${label}-${process.pid}-${crypto.randomBytes(12).toString('hex')}`;
     const ctx = await browser.newContext({ serviceWorkers: 'block' });
-    await ctx.addInitScript(({ rodPort, altPort, relayPort, rodConfs, altCode, altType, altPath, altRefundBlocks, altConfirmations }) => {
+    await ctx.addInitScript(({ rodPort, altPort, relayPort, rodConfs, altCode, altType, altPath, altRefundBlocks, altConfirmations, harnessContextId }) => {
       const altUrl = 'http://127.0.0.1:' + altPort + altPath;
       const altChains = {};
       altChains[altCode] = {
@@ -220,10 +434,12 @@ async function main() {
         tickMs: 1500
       }));
       localStorage.setItem('rodOtcTestAltChain', altCode);
+      localStorage.setItem('rodOtcHarnessContextId', harnessContextId);
     }, {
       rodPort: PORTS.rod, altPort: PORTS.alt, relayPort: PORTS.relay, rodConfs: rodConfirmationsCfg,
       altCode: ALT, altType: ALT_PROFILE.apiType, altPath: ALT_PROFILE.apiPath,
-      altRefundBlocks: ALT_REFUND_BLOCKS, altConfirmations: ALT_PROFILE.confirmations
+      altRefundBlocks: ALT_REFUND_BLOCKS, altConfirmations: ALT_PROFILE.confirmations,
+      harnessContextId: contextId
     });
     const page = await ctx.newPage();
     page.on('console', (m) => {
@@ -255,6 +471,7 @@ async function main() {
     });
     await page.goto(`http://127.0.0.1:${PORTS.app}/index.html`, { waitUntil: 'load' });
     await page.waitForFunction(() => window.rodOtc && window.rodOtc.engine && window.jQuery);
+    page.harnessContextId = contextId;
     return page;
   };
 
@@ -262,6 +479,7 @@ async function main() {
   const bob = await mkContext('bob');
   runtime.alice = alice;
   runtime.bob = bob;
+  await assertContextStorageIsolation(alice, bob, alice.harnessContextId, bob.harnessContextId);
 
   const mkWallet = (page) => page.evaluate(() => {
     coinjs.setNetwork('ROD');
@@ -312,8 +530,10 @@ async function main() {
 
   await waitFor(() => alice.evaluate(() => $('#nsMyXpub').val() ? true : false), 15000, 'alice swap xpub');
   await waitFor(() => bob.evaluate(() => $('#nsMyXpub').val() ? true : false), 15000, 'bob swap xpub');
+  const aliceXpub = await alice.evaluate(() => $('#nsMyXpub').val());
   const bobXpub = await bob.evaluate(() => $('#nsMyXpub').val());
   step('swap accounts derived (both)', !!bobXpub, 'bob xpub ' + bobXpub.slice(0, 12) + '…');
+  await assertPeerIdentityIsolation(alice, bob, aliceWallet, bobWallet, aliceXpub, bobXpub);
 
   // ---- Alice creates & starts the swap ----
   await alice.evaluate(({ rod, alt, altCode, peerXpub, peerRodIdentity, peerRodPayout, release }) => {
@@ -392,20 +612,24 @@ async function main() {
   step('alice accepted', await accept(alice));
 
   // ---- pre-funding pipeline → PREPARED on both, with NOTHING broadcast ----
-  try {
-    await waitFor(() => alice.evaluate((id) => {
-      const s = rodOtc.engine.restoreLive(id);
-      return (s && s.rodRefund && s.rodRefund.signedHex && s.localRodAdaptorSignature && s.remoteAltAdaptorSignature && s.localPrepared) ? true : null;
-    }, swapId), 90000, 'alice PREPARED (refund signed + adaptor sigs verified)');
-    await waitFor(() => bob.evaluate((id) => {
-      const s = rodOtc.engine.restoreLive(id);
-      return (s && s.altRefund && s.altRefund.signedHex && s.localAltAdaptorSignature && s.remoteRodAdaptorSignature && s.localPrepared) ? true : null;
-    }, swapId), 90000, 'bob PREPARED (refund signed + adaptor sigs verified)');
-  } catch (error) {
-    error.message += '\nAlice diagnostics: ' + JSON.stringify(await sessionDiagnostics(alice, swapId));
-    error.message += '\nBob diagnostics: ' + JSON.stringify(await sessionDiagnostics(bob, swapId));
-    throw error;
-  }
+  await waitForProtocolStage('bilateral acceptance and readiness', (a, b) =>
+    a.localAccepted && a.remoteAccepted && a.bilateralReady &&
+    b.localAccepted && b.remoteAccepted && b.bilateralReady);
+  await waitForProtocolStage('adaptor-point commitment received by both peers', (a, b) =>
+    a.adaptorPoint && b.adaptorPoint && a.adaptorPoint === b.adaptorPoint);
+  await waitForProtocolStage('both planned funding transactions exchanged', (a, b) =>
+    a.plannedRodFunding && a.plannedAltFunding &&
+    b.plannedRodFunding && b.plannedAltFunding);
+  await waitForProtocolStage('both timelocked refund exchanges completed', (a, b) =>
+    a.role === 'seller' && a.rodRefundSigned && a.altRefundCosigned &&
+    b.role === 'buyer' && b.rodRefundCosigned && b.altRefundSigned);
+  await waitForProtocolStage('both claim adaptor signatures exchanged and verified', (a, b) =>
+    a.localRodAdaptorSignature && a.remoteAltAdaptorSignature &&
+    b.localAltAdaptorSignature && b.remoteRodAdaptorSignature);
+  await waitForProtocolStage('both peers persisted local PREPARED', (a, b) =>
+    a.localPrepared && b.localPrepared);
+  await waitForProtocolStage('both peers observed counterparty PREPARED', (a, b) =>
+    a.remotePrepared && b.remotePrepared);
   step('both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures', true);
 
   const aliceRefund = await alice.evaluate((id) => {
@@ -431,13 +655,14 @@ async function main() {
   step('no unexpected browser console, page, request, or HTTP errors',
     runtime.browserIssues.length === 0, JSON.stringify(runtime.browserIssues));
 
-  fs.writeFileSync(path.join(__dirname, `e2e-report-${ALT.toLowerCase()}-${SCENARIO}.json`), JSON.stringify({
+  fs.writeFileSync(path.join(__dirname, `e2e-report-${ALT.toLowerCase()}-${SCENARIO}${REPORT_REPEAT_SUFFIX}.json`), JSON.stringify({
     scenario: SCENARIO,
     swapId,
     steps: results.steps,
     rodBroadcasts: rodChain.broadcasts,
     altBroadcasts: altChain.broadcasts,
     browserIssues: runtime.browserIssues,
+    relayDiagnostics: relayDiagnostics(swapId),
     relayEventTypes: relay.events.map((e) => {
       try { return JSON.parse(e.content).type; } catch (err) { return 'unknown'; }
     })
@@ -678,6 +903,7 @@ main().catch(async (e) => {
     browserIssues: runtime.browserIssues,
     rodBroadcasts: runtime.rodChain ? runtime.rodChain.broadcasts : [],
     altBroadcasts: runtime.altChain ? runtime.altChain.broadcasts : [],
+    relayDiagnostics: relayDiagnostics(runtime.swapId),
     relayEventTypes: runtime.relay && runtime.relay.events
       ? runtime.relay.events.map((event) => {
           try { return JSON.parse(event.content).type; } catch (error) { return 'unknown'; }
@@ -686,13 +912,18 @@ main().catch(async (e) => {
   };
   for (const [label, page] of [['alice', runtime.alice], ['bob', runtime.bob]]) {
     try {
-      if (page && !page.isClosed()) report[label] = await sessionDiagnostics(page, runtime.swapId);
+      if (page && !page.isClosed()) {
+        report[label] = await sessionDiagnostics(page, runtime.swapId);
+        const protocol = await sessionProtocolState(page, runtime.swapId);
+        report[label].protocol = protocol;
+        report[label].missingPreparedPrerequisites = missingPreparedPrerequisites(protocol);
+      }
     } catch (diagnosticError) {
       report[label] = { diagnosticError: diagnosticError.message };
     }
   }
   fs.writeFileSync(
-    path.join(__dirname, `e2e-report-${ALT.toLowerCase()}-${SCENARIO}.json`),
+    path.join(__dirname, `e2e-report-${ALT.toLowerCase()}-${SCENARIO}${REPORT_REPEAT_SUFFIX}.json`),
     JSON.stringify(report, null, 2)
   );
   try { if (runtime.browser) await runtime.browser.close(); } catch (closeError) {}

@@ -16,6 +16,15 @@ values drift. Unexpected page errors, failed requests, and HTTP failures fail
 the scenario; the only allowed 404 is the deliberate pre-index transaction
 probe used by settlement polling.
 
+Before a settlement scenario starts, the harness proves that Alice and Bob
+have independent browser storage, wallet identities, swap xpubs, Nostr keys,
+and empty session stores. Chromium `--single-process` mode is rejected because
+it invalidates that isolation. The pre-funding handshake uses separate,
+role-aware deadlines for readiness, adaptor commitment, funding plans, refund
+signatures, adaptor signatures, local PREPARED, and remote PREPARED. A timeout
+report names the exact missing prerequisites and includes pending signature
+slots plus relay event counts grouped by message type and signer.
+
 ## Run
 
 ```bash
@@ -32,10 +41,16 @@ Useful controls:
 - `ALT_CHAIN=LTC SCENARIO=happy node e2e-swap-test.js` — one scenario.
 - `ALT_CHAIN=DOGE SCENARIO=altrefund node e2e-swap-test.js` — DOGE refund.
 - `RELOAD_TEST=1` with `SCENARIO=happy` — mid-swap persistence/replay.
+- `DOGE_ROD_REFUND_REPEATS=5 bash run-all.sh` — run the complete matrix and
+  require five total passes of the historically flaky DOGE ROD-refund case
+  (default: 3, maximum: 20).
+- `PROTOCOL_STAGE_TIMEOUT_MS=60000` — change each pre-funding stage deadline
+  without returning to one opaque aggregate timeout.
 - `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium` — use a preinstalled
   browser.
 - `PLAYWRIGHT_CHROMIUM_ARGS_JSON='["--flag"]'` — pass host-specific launch
-  flags when a custom browser binary requires them.
+  flags when a custom browser binary requires them. `--single-process` is
+  intentionally forbidden.
 
 `run-all.sh` is deliberately sequential. The mock servers use fixed ports and
 the swap automation is timing-sensitive; parallel cases would create harness

@@ -1,0 +1,58 @@
+name: Wallet proof harness
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: proof-harness-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fast-gates:
+    name: Fast contracts and mutations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Run deterministic release gates
+        run: bash tests/run-fast.sh
+
+  browser-settlement:
+    name: Chromium and settlement matrix
+    needs: fast-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/harness/package-lock.json
+      - name: Install pinned harness dependencies
+        working-directory: tests/harness
+        run: npm ci
+      - name: Install Chromium and system dependencies
+        working-directory: tests/harness
+        run: npx playwright install --with-deps chromium
+      - name: Run browser and independently validated settlement gates
+        env:
+          SKIP_MUTATIONS: "1"
+          CI: "true"
+        run: bash tests/harness/run-all.sh
+      - name: Upload scenario reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: settlement-proof-reports
+          path: tests/harness/e2e-report-*.json
+          if-no-files-found: warn
+          retention-days: 30

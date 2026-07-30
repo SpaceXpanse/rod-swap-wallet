@@ -128,13 +128,13 @@
 		}
 	}
 
-		nostrModule.createEnvelope = function(input){
+	nostrModule.createEnvelope = function(input){
 		var payload = input.payload || {};
 		var identity = input.privateKeyHex ? nostrModule.identityFromPrivateKey(input.privateKeyHex) : null;
-		var pubkey = identity ? identity.pubkey : normalizePubkeyHex(input.pubkey || '');
-		if(!pubkey){
-			throw new Error('A valid Nostr pubkey is required to publish OTC messages');
+		if(!identity){
+			throw new Error('A valid Nostr private key is required to sign OTC messages');
 		}
+		var pubkey = identity.pubkey;
 		var envelope = {
 			version: 1,
 			swapId: input.swapId,
@@ -156,10 +156,92 @@
 			content: JSON.stringify(envelope)
 		};
 		event.id = computeEventId(event);
+		event.sig = schnorrSign(event.id, identity.privateKeyHex, input.auxiliaryRandomnessHex);
+		return event;
+	};
+
+	/* ---- Order detail events ----
+	   These carry the DETAIL of an order, never the order itself. An offer
+	   exists because a ROD name record exists; that record may name one of
+	   these events (its id and signing key) as the place to find the fuller
+	   payload, which keeps the on-chain value small without moving the offer
+	   off chain. The tradable terms — price, size, side, pair — stay in the
+	   name record and are never read from here.
+
+	   Because the record names one exact event id, and validation checks that
+	   id and the signature under the key the record names, a relay can withhold
+	   detail but cannot substitute, alter or invent it. Kind 31340 is in the
+	   NIP-01 parameterised-replaceable range (30000-39999) so a re-publish
+	   supersedes cleanly under the same d-tag; superseding an ORDER, though,
+	   means writing a new name record, not publishing a new event. */
+	nostrModule.ORDER_EVENT_KIND = 31340;
+
+	nostrModule.createOrderEvent = function(input){
+		var order = input.order || {};
+		var identity = input.privateKeyHex ? nostrModule.identityFromPrivateKey(input.privateKeyHex) : null;
+		var pubkey = identity ? identity.pubkey : normalizePubkeyHex(input.pubkey || '');
+		if(!pubkey){
+			throw new Error('A valid Nostr pubkey is required to publish an order');
+		}
+		if(!order.orderId){
+			throw new Error('An order must carry an orderId');
+		}
+		/* Bind the order to the identity that publishes it, so a relay or a
+		   third party cannot re-serve someone else's order under their own key
+		   while keeping the original swap xpub. */
+		var body = {};
+		for(var k in order){ if(Object.prototype.hasOwnProperty.call(order, k)) body[k] = order[k]; }
+		body.nostrPubkey = pubkey;
+		/* No cancelled/expiry fields here on purpose: whether an order exists,
+		   and for how long, is decided by its ROD name record. A relay-side
+		   tombstone would imply this transport can retire an offer, which it
+		   cannot. */
+		var envelope = {
+			version: 1,
+			kind: 'otc-order',
+			order: body
+		};
+		var event = {
+			pubkey: pubkey,
+			created_at: input.createdAt || Math.floor((new Date()).getTime() / 1000),
+			kind: nostrModule.ORDER_EVENT_KIND,
+			tags: [
+				['d', String(order.orderId)],
+				['pair', String(order.pair || '')],
+				['side', String(order.side || '')]
+			],
+			content: JSON.stringify(envelope)
+		};
+		event.id = computeEventId(event);
 		if(identity){
 			event.sig = schnorrSign(event.id, identity.privateKeyHex, input.auxiliaryRandomnessHex);
 		}
 		return event;
+	};
+
+	nostrModule.validateOrderEvent = function(eventObject){
+		if(!eventObject || !eventObject.content || !eventObject.id){
+			throw new Error('Incomplete order event');
+		}
+		if(eventObject.kind !== nostrModule.ORDER_EVENT_KIND){
+			throw new Error('Unsupported order event kind ' + eventObject.kind);
+		}
+		if(computeEventId(eventObject) !== eventObject.id){
+			throw new Error('Order event ID mismatch');
+		}
+		/* Unsigned orders are refused outright: an order is an invitation to
+		   commit funds, so it must be attributable. */
+		if(!eventObject.sig || !schnorrVerify(eventObject.id, eventObject.pubkey, eventObject.sig)){
+			throw new Error('Order event signature mismatch');
+		}
+		var envelope = JSON.parse(eventObject.content);
+		if(envelope.version !== 1 || envelope.kind !== 'otc-order' || !envelope.order){
+			throw new Error('Unsupported order payload');
+		}
+		if(envelope.order.nostrPubkey && envelope.order.nostrPubkey !== eventObject.pubkey){
+			throw new Error('Order identity does not match the publishing key');
+		}
+		return envelope;
 	};
 
 	nostrModule.validateEnvelope = function(eventObject){
@@ -172,13 +254,12 @@
 		if(computeEventId(eventObject) !== eventObject.id){
 			throw new Error('OTC Nostr envelope ID mismatch');
 		}
-		/* The signature is MANDATORY. event.id is a plain hash over the content
-		   and pubkey, so anyone can mint an event carrying an arbitrary pubkey
-		   with a matching id. Treating an absent sig as "nothing to check" let
-		   a stranger impersonate the pinned counterparty on every handler that
-		   trusts eventObject.pubkey. */
+		/* NIP-01 events are signed objects. Treating sig as optional lets a relay
+		   fabricate any swap protocol message while merely copying a pubkey into
+		   the unsigned event. Every OTC message can change settlement state, so
+		   missing and invalid signatures are the same hard failure. */
 		if(!eventObject.sig || !schnorrVerify(eventObject.id, eventObject.pubkey, eventObject.sig)){
-			throw new Error('OTC Nostr event signature missing or invalid');
+			throw new Error('OTC Nostr event signature mismatch');
 		}
 		var envelope = JSON.parse(eventObject.content);
 		if(envelope.version !== 1 || !MESSAGE_TYPES[envelope.type] || !envelope.swapId || typeof envelope.sequence !== 'number'){

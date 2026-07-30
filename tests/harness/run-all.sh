@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Full proof matrix: in-browser unit checks, then every swap scenario on every
-# supported counter chain, then mid-swap reload resilience.
-#
-#   ./run-all.sh
-#
-# Each e2e run writes tests/harness/e2e-report-<chain>-<scenario>.json.
+# Complete release gate:
+#   1. deterministic Node contract/security/release/mutation checks
+#   2. real-browser integration + offline PWA check
+#   3. independently validated settlement matrix for every OTC counter chain
 set -u
+set -o pipefail
 cd "$(dirname "$0")"
 
 FAILED=0
 RESULTS=()
 NODE_BIN="${NODE_BIN:-}"
+SUPPORTED_SWAP_CHAINS=(LTC DOGE)
 
 if [ -z "$NODE_BIN" ]; then
   if command -v node >/dev/null 2>&1; then
@@ -33,42 +33,65 @@ record() {
   fi
 }
 
-run() {
-  local label="$1"; shift
+run_node() {
+  local label="$1" script="$2"
+  shift 2
   echo ""
   echo "=============================================================="
   echo ">>> $label"
   echo "=============================================================="
-  env "$@" "$NODE_BIN" e2e-swap-test.js 2>&1 | grep -v 'console.error'
-  record "$label" "${PIPESTATUS[0]}"
+  env "$@" "$NODE_BIN" "$script"
+  record "$label" "$?"
 }
 
-echo "=============================================================="
-echo ">>> unit: chain layer, policy, fees, invariants"
-echo "=============================================================="
-"$NODE_BIN" unit-browser-test.js
-record "unit: chain layer, policy, fees, invariants" $?
+run_e2e() {
+  local label="$1"
+  shift
+  echo ""
+  echo "=============================================================="
+  echo ">>> $label"
+  echo "=============================================================="
+  env "$@" "$NODE_BIN" e2e-swap-test.js
+  record "$label" "$?"
+}
 
-for CHAIN in LTC DOGE BTC BCH; do
-  run "e2e $CHAIN happy path"        ALT_CHAIN=$CHAIN SCENARIO=happy
-  run "e2e $CHAIN ROD-leg refund"    ALT_CHAIN=$CHAIN SCENARIO=refund
-  run "e2e $CHAIN alt-leg refund"    ALT_CHAIN=$CHAIN SCENARIO=altrefund
-done
+run_node "release/package integration contracts" ../release-gate.js
+run_node "explorer API contracts and failure isolation" ../explorer-contract.js
+run_node "security and protocol adversarial regressions" ../security-regression.js
+run_node "wallet balance/network-switch races" ../wallet-balance-race.js
+if [ "${SKIP_MUTATIONS:-0}" != "1" ]; then
+  run_node "negative controls: blocker mutations must be killed" ../mutation-gate.js
+fi
 
-run "e2e LTC happy + mid-swap reload"  ALT_CHAIN=LTC SCENARIO=happy RELOAD_TEST=1
-run "e2e DOGE happy + mid-swap reload" ALT_CHAIN=DOGE SCENARIO=happy RELOAD_TEST=1
-run "e2e BTC happy + mid-swap reload"  ALT_CHAIN=BTC SCENARIO=happy RELOAD_TEST=1
-run "e2e BCH happy + mid-swap reload"  ALT_CHAIN=BCH SCENARIO=happy RELOAD_TEST=1
+if [ "${FAST_ONLY:-0}" = "1" ]; then
+  echo ""
+  echo "FAST_ONLY=1: browser and settlement matrix skipped"
+else
+  if [ ! -d node_modules ]; then
+    echo ""
+    echo "tests/harness/node_modules is missing; run npm ci in tests/harness"
+    record "browser dependency preflight" 1
+  else
+    run_node "real-browser wiring + offline PWA shell" unit-browser-test.js
+
+    for CHAIN in "${SUPPORTED_SWAP_CHAINS[@]}"; do
+      run_e2e "e2e $CHAIN happy path"       ALT_CHAIN="$CHAIN" SCENARIO=happy
+      run_e2e "e2e $CHAIN ROD-leg refund"   ALT_CHAIN="$CHAIN" SCENARIO=refund
+      run_e2e "e2e $CHAIN alt-leg refund"   ALT_CHAIN="$CHAIN" SCENARIO=altrefund
+      run_e2e "e2e $CHAIN reload recovery"  ALT_CHAIN="$CHAIN" SCENARIO=happy RELOAD_TEST=1
+    done
+  fi
+fi
 
 echo ""
 echo "=============================================================="
 echo ">>> PROOF MATRIX"
 echo "=============================================================="
-for r in "${RESULTS[@]}"; do echo "$r"; done
+for result in "${RESULTS[@]}"; do echo "$result"; done
 echo "--------------------------------------------------------------"
 if [ "$FAILED" -eq 0 ]; then
-  echo "ALL SUITES PASSED"
+  echo "ALL REQUESTED SUITES PASSED"
 else
-  echo "SOME SUITES FAILED"
+  echo "ONE OR MORE REQUIRED SUITES FAILED"
 fi
 exit "$FAILED"

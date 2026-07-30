@@ -16,6 +16,54 @@ return typeof value === "string" && value !== "1";
 	var WALLET_SESSION_KEY = 'rodWalletSession';
 	var ACTIVE_COIN_KEY = 'rodActiveCoin';
 
+	/* Balance requests outlive network switches.  Keep request ownership in an
+	   epoch instead of using the loader's visibility as application state: a
+	   late DGB explorer callback must never overwrite (or block) a newer ROD,
+	   LTC, DOGE, BTC, or BCH request. */
+	function createWalletBalanceRequestEpoch(){
+		var epoch = 0;
+		var pending = false;
+
+		function matches(request, networkCode, address){
+			return !!(
+				request &&
+				pending &&
+				request.epoch === epoch &&
+				pending.epoch === request.epoch &&
+				request.networkCode === networkCode &&
+				request.address === address
+			);
+		}
+
+		return {
+			reset: function(){
+				epoch += 1;
+				pending = false;
+			},
+			begin: function(networkCode, address){
+				if(pending && pending.networkCode === networkCode && pending.address === address){
+					return false;
+				}
+				pending = {
+					epoch: ++epoch,
+					networkCode: networkCode,
+					address: address
+				};
+				return pending;
+			},
+			isCurrent: matches,
+			finish: function(request, networkCode, address){
+				if(!matches(request, networkCode, address)){
+					return false;
+				}
+				pending = false;
+				return true;
+			}
+		};
+	}
+
+	var walletBalanceRequests = createWalletBalanceRequestEpoch();
+
 	/* Any coin registered in coinjs.networks is selectable; unknown values fall
 	   back to ROD so a stale localStorage entry cannot leave the wallet on a
 	   network that no longer exists. */
@@ -112,6 +160,20 @@ return typeof value === "string" && value !== "1";
 		if(coinjs.setNetwork){
 			coinjs.setNetwork(c);
 		}
+
+		/* The old request may still complete, but it no longer owns the balance
+		   UI.  Reset the loader and value before renderOpenWallet() starts the
+		   request for the newly selected network. */
+		walletBalanceRequests.reset();
+		$("#walletLoader").addClass("hidden");
+		var nextUnit = (coinjs.getNetwork && coinjs.getNetwork().unit) || c;
+		$("#walletBalance").html('0.00000000 '+nextUnit).attr('rel', 0);
+
+		/* Clear per-host API errors from the previous network so the banner
+		   does not stick when switching coins. */
+		_apiHostErrors = {};
+		updateApiServerStatus({online: true, url: ''});
+
 		syncExplorersFromNetwork();
 		refreshSiteCoinLabels();
 
@@ -236,19 +298,35 @@ return typeof value === "string" && value !== "1";
 		return true;
 	}
 
+	/* Track per-host API status so one host recovering does not hide
+	   another host's failure.  Keys are hostnames, values are the error
+	   message string (present = down, absent = up). */
+	var _apiHostErrors = {};
+
+	function _hostFromUrl(url) {
+		try { var m = /^https?:\/\/([^\/]+)/.exec(url); return m ? m[1] : ''; } catch(e) { return ''; }
+	}
+
 	function updateApiServerStatus(status){
 		var statusBox = $("#apiServerStatus");
-		if(!statusBox.length){
-			return;
+		if(!statusBox.length) return;
+
+		var host = _hostFromUrl(status && status.url);
+		if(status && status.online){
+			if(host) delete _apiHostErrors[host];
+		} else {
+			var msg = (status && status.message) ? status.message : (host || 'API server') + ' is unreachable';
+			if(host) _apiHostErrors[host] = msg;
 		}
 
-		if(status && status.online){
+		/* Build a combined message from all currently-down hosts. */
+		var msgs = [];
+		for(var h in _apiHostErrors){ if(_apiHostErrors.hasOwnProperty(h)) msgs.push(_apiHostErrors[h]); }
+		if(msgs.length === 0){
 			statusBox.addClass("hidden");
 			return;
 		}
-
-		var message = (status && status.message) ? status.message : "ROD API server is currently unreachable";
-		statusBox.find(".api-server-status-message").text(message+". Balance, UTXO lookup, and broadcast may be unavailable; local address generation and signing still work.");
+		statusBox.find(".api-server-status-message").text(msgs.join(' · ') + ". Balance, UTXO lookup, and broadcast may be unavailable; local address generation and signing still work.");
 		statusBox.removeClass("hidden").fadeOut().fadeIn();
 	}
 
@@ -552,15 +630,62 @@ return typeof value === "string" && value !== "1";
 	});
 
 	$("#walletShowBuy").click(function(){
-		$(".walletOptions").removeClass("hidden").addClass("hidden");
-		$("#walletActionPlaceholder").addClass("hidden");
-		$("#walletBuy").removeClass("hidden");
-		scrollToWalletActionPanel();
+		/* For chains that have OTC swap support (listed in CHAINS.definitions),
+		   navigate to the OTC Swap tab. For wallet-only chains (BTC, BCH, DGB),
+		   show a message that OTC support is pending. */
+		var activeCoin = getActiveCoin();
+		var otcSupported = window.rodOtc && window.rodOtc.chains && window.rodOtc.chains.definitions;
+		if(activeCoin === 'ROD' || (otcSupported && otcSupported[activeCoin])){
+			/* Navigate to OTC Swap tab */
+			$('a[href="#otc"]').tab('show');
+		} else {
+			$(".walletOptions").removeClass("hidden").addClass("hidden");
+			$("#walletActionPlaceholder").addClass("hidden");
+			/* Show pending message in the action panel */
+			if(!$('#walletBuyPending').length){
+				$('#walletActionPanel').append('<div id="walletBuyPending" class="walletOptions hidden"><h3><span class="glyphicon glyphicon-info-sign"></span> OTC swap support pending</h3><p class="text-muted">OTC atomic swap support for <b class="js-coin-unit">'+activeCoin+'</b> is not yet available. Currently supported chains for OTC trading: ROD, LTC, DOGE.</p><p class="text-muted">Wallet features (address generation, balance check, and key management) work normally.</p></div>');
+			}
+			$('#walletBuyPending .js-coin-unit').text(activeCoin);
+			$('#walletBuyPending').removeClass('hidden');
+			scrollToWalletActionPanel();
+		}
 	});
 
-	$("#walletBalance, #walletAddress, #walletQrCode").click(function(){
-		walletBalance();
+	/* Clicking balance refresh link triggers a balance refresh */
+	$(document).on('click', '#walletRefreshLink', function(){ walletBalance(); });
+
+	/* Clicking QR code or address copies the address to clipboard */
+	$("#walletAddress, #walletQrCode").click(function(){
+		var addr = $.trim($("#walletAddress").text());
+		if(!addr) return;
+		/* Use modern Clipboard API if available, fallback to execCommand */
+		if(navigator.clipboard && navigator.clipboard.writeText){
+			navigator.clipboard.writeText(addr).then(function(){
+				flash_wallet_copy('Address copied!');
+			}, function(){ fallback_copy_wallet(addr); });
+		} else {
+			fallback_copy_wallet(addr);
+		}
 	});
+
+	function fallback_copy_wallet(text){
+		var ta = document.createElement('textarea');
+		ta.value = text;
+		ta.style.position = 'fixed';
+		ta.style.left = '-9999px';
+		document.body.appendChild(ta);
+		ta.select();
+		try { document.execCommand('copy'); flash_wallet_copy('Address copied!'); }
+		catch(e){ flash_wallet_copy('Copy failed — select manually'); }
+		document.body.removeChild(ta);
+	}
+
+	function flash_wallet_copy(msg){
+		var $hint = $('.wallet-refresh-hint');
+		var orig = $hint.html();
+		$hint.html('<span class="glyphicon glyphicon-ok" style="color:#62e6a6"></span> ' + msg);
+		setTimeout(function(){ $hint.html(orig); }, 2000);
+	}
 
 	$(document).on('click', '.walletCoinSelect', function(e){
 		e.preventDefault();
@@ -623,48 +748,18 @@ return typeof value === "string" && value !== "1";
 
 			if(dvalue>=total){
 				var change = dvalue-total;
-				/* A change output below the chain's dust/change threshold makes
-				   the whole transaction non-standard, so it is signed,
-				   broadcast and rejected. Dropping the remainder to fee is the
-				   correct (and only safe) outcome. On DOGE a sub-soft-dust
-				   change also attracts a 1,000,000 koinu surcharge the fee
-				   never budgeted for. */
-				var changeSats = Math.round((change*1) * 100000000);
-				var changeChain = (coinjs.network && coinjs.network.code) || 'ROD';
-				var changeThreshold = 546;
-				try {
-					var changePolicy = window.rodOtc && rodOtc.chains ? rodOtc.chains.getPolicy(changeChain) : null;
-					if(changePolicy && changePolicy.changeThresholdSats) changeThreshold = changePolicy.changeThresholdSats;
-				} catch(changePolicyError) {}
-				if(changeSats >= changeThreshold){
+				if((change*1)>0){
 					tx.addoutput($("#walletAddress").html(), change);
-				} else if(changeSats > 0){
-					console.log('Dropping ' + changeSats + ' base units of change to fee: below ' + changeChain + ' change threshold ' + changeThreshold);
 				}
 
 				var tx2 = coinjs.transaction();
 				var txunspent = tx2.deserialize(tx.serialize());
-				/* Serialisation drops the prevout values and the fork-id rule,
-				   both of which the BCH sighash needs. Carry them across the
-				   round trip or every BCH wallet send fails to sign. */
-				txunspent.forkId = tx.forkId;
-				for(var carryIdx = 0; carryIdx < txunspent.ins.length && carryIdx < tx.ins.length; carryIdx++){
-					if(tx.ins[carryIdx].value != null) txunspent.ins[carryIdx].value = tx.ins[carryIdx].value;
-				}
 				var signed = txunspent.sign($("#walletKeys .privkey").val());
 
 				tx2.broadcast(function(data){
 					$("#walletLoader").addClass("hidden");
 					if(data && data.success){
-						var broadcastTxid = String(data.txid || '');
-					if(!/^[0-9a-fA-F]{64}$/.test(broadcastTxid)){
-						/* Whatever the API returned is not a txid. Never put it
-						   in an href or innerHTML: the response is attacker
-						   controlled if the API is, and this origin holds keys. */
-						$("#walletSendConfirmStatus").removeClass('hidden alert-danger').addClass('alert-success').text('Transaction broadcast successfully, but the API returned a malformed txid.');
-					} else {
-						$("#walletSendConfirmStatus").removeClass('hidden alert-danger').addClass('alert-success').html('Transaction broadcast successfully.<br>txid: <a href="'+explorer_tx+broadcastTxid+'" target="_blank">'+broadcastTxid+'</a>');
-					}
+						$("#walletSendConfirmStatus").removeClass('hidden alert-danger').addClass('alert-success').html('Transaction broadcast successfully.<br>txid: <a href="'+explorer_tx+data.txid+'" target="_blank">'+data.txid+'</a>');
 						$("#walletSendFailTransaction").addClass('hidden');
 						thisbtn.addClass('hidden').attr('disabled',true);
 						$("#walletSendBtn").attr('disabled',true);
@@ -758,14 +853,7 @@ return typeof value === "string" && value !== "1";
 	var walletFeeWasManuallyEdited = false;
 
 	function ensureWalletFeeMeetsRelayFloor(forceMinimumFee, estimatedInputCount){
-		/* One hard-coded rate for five chains was wrong in both directions:
-		   10x too low on DOGE (relay floor 1000/byte, so the transaction was
-		   simply unminable) and ~50x too high on BTC/LTC/BCH. Read the
-		   per-chain relay policy instead. */
-		var activeChainCode = (coinjs.network && coinjs.network.code) || 'ROD';
-		var chainPolicy = null;
-		try { chainPolicy = window.rodOtc && rodOtc.chains ? rodOtc.chains.getPolicy(activeChainCode) : null; } catch (policyError) { chainPolicy = null; }
-		var minimumSatPerByte = (chainPolicy && chainPolicy.feeRatePerByte) ? chainPolicy.feeRatePerByte : 232;
+		var minimumSatPerByte = 100;
 		var estimatedBytes = estimateWalletTransactionBytes(estimatedInputCount);
 		var minimumFeeSat = estimatedBytes * minimumSatPerByte;
 		var minimumFeeRod = (minimumFeeSat / 100000000);
@@ -941,17 +1029,27 @@ return typeof value === "string" && value !== "1";
 	});
 
 	function walletBalance(){
-		if(!$("#walletLoader").hasClass("hidden")){
-			return;
-		}
-		var unit = (coinjs.getNetwork && coinjs.getNetwork().unit) || getActiveCoin();
+		var network = coinjs.getNetwork ? coinjs.getNetwork() : null;
+		var networkCode = (network && network.code) || getActiveCoin();
+		var unit = (network && network.unit) || networkCode;
 		var addr = $("#walletAddress").html() || (openWalletData && openWalletData.address) || '';
 		if(!addr){
 			$("#walletBalance").html('0.00000000 '+unit).attr('rel', 0);
 			return;
 		}
+		var request = walletBalanceRequests.begin(networkCode, addr);
+		if(!request){
+			return;
+		}
 		$("#walletLoader").removeClass("hidden");
 		coinjs.addressBalance(addr, function(data){
+			var activeNetwork = coinjs.getNetwork ? coinjs.getNetwork() : null;
+			var activeNetworkCode = (activeNetwork && activeNetwork.code) || getActiveCoin();
+			var activeAddress = $("#walletAddress").html() || (openWalletData && openWalletData.address) || '';
+			if(!walletBalanceRequests.finish(request, activeNetworkCode, activeAddress)){
+				return;
+			}
+
 			if(data["success"]){
 				const v = data["data"][0]["balance"];
 				$("#walletBalance").html(v+" "+unit).attr('rel',v).fadeOut().fadeIn();
@@ -1373,13 +1471,7 @@ return typeof value === "string" && value !== "1";
 					estimatedTxSize += 147
 				}
 
-				/* The declared input amount is required by the fork-id sighash
-				   (BCH). Passing null when it is missing makes signing fail
-				   loudly instead of producing an invalid signature. */
-				var declaredInputAmount = parseFloat($(".txIdAmount",o).val());
-				var declaredInputSats = (isFinite(declaredInputAmount) && declaredInputAmount > 0)
-					? Math.round(declaredInputAmount * 100000000) : null;
-				tx.addinput($(".txId",o).val(), $(".txIdN",o).val(), $(".txIdScript",o).val(), seq, declaredInputSats);
+				tx.addinput($(".txId",o).val(), $(".txIdN",o).val(), $(".txIdScript",o).val(), seq);
 			} else {
 				$('#putTabs a[href="#txinputs"]').attr('style','color:#a94442;');
 			}
@@ -2352,6 +2444,21 @@ function rawSubmitDefault(btn){
 			rel: '0x30;0xb0;0x32;0x19da462;0x19d9cfe;true;true;ltc'
 		},
 		{
+			name: 'Bitcoin Mainnet',
+			value: 'btc-mainnet',
+			rel: '0x00;0x80;0x05;0x488b21e;0x488ade4;true;true;bc'
+		},
+		{
+			name: 'Bitcoin Cash Mainnet',
+			value: 'bch-mainnet',
+			rel: '0x00;0x80;0x05;0x488b21e;0x488ade4;true;true;'
+		},
+		{
+			name: 'DigiByte Mainnet',
+			value: 'dgb-mainnet',
+			rel: '0x1e;0x80;0x3f;0x488b21e;0x488ade4;true;true;dgb'
+		},
+		{
 			name: 'Dogecoin Mainnet',
 			value: 'doge-mainnet',
 			rel: '0x1e;0x9e;0x16;0x2facafd;0x2fac398;true;true;'
@@ -2363,12 +2470,22 @@ function rawSubmitDefault(btn){
 		}
 	];
 
+	/* Map network dropdown value prefixes to coinjs.activeNetwork codes so
+	   the dropdown can be matched by code, not just by pub/multisig bytes
+	   (BTC and BCH share the same pub 0x00 and multisig 0x05). */
+	var dropdownCodeMap = {
+		'rod-mainnet': 'ROD', 'ltc-mainnet': 'LTC', 'btc-mainnet': 'BTC',
+		'bch-mainnet': 'BCH', 'dgb-mainnet': 'DGB', 'doge-mainnet': 'DOGE',
+		'rod-testnet': 'ROD'
+	};
+
 	// Function to populate the network dropdown
 	function populateNetworkDropdown() {
 		var $dropdown = $('#coinjs_coin');
 		$dropdown.empty(); // Clear existing options
 
-		// Determine current network based on coinjs.pub
+		// Determine current network — prefer activeNetwork code over pub/multisig
+		var activeCode = (coinjs.activeNetwork || '').toUpperCase();
 		var currentPub = coinjs.pub;
 		var currentMultisig = coinjs.multisig;
 		var selectedFound = false;
@@ -2378,6 +2495,7 @@ function rawSubmitDefault(btn){
 			var networkValues = network.rel.split(';');
 			var networkPub = parseInt(networkValues[0]);
 			var networkMultisig = parseInt(networkValues[2]);
+			var networkCode = dropdownCodeMap[network.value] || '';
 
 			// Create option element
 			var $option = $('<option>', {
@@ -2386,8 +2504,15 @@ function rawSubmitDefault(btn){
 				rel: network.rel
 			});
 
-			// Select if matches current network
-			if(currentPub === networkPub && currentMultisig === networkMultisig) {
+			// Match by active network code first, fall back to pub/multisig
+			var isMatch = false;
+			if(activeCode && networkCode) {
+				isMatch = (activeCode === networkCode);
+			} else if(!selectedFound) {
+				isMatch = (currentPub === networkPub && currentMultisig === networkMultisig);
+			}
+
+			if(isMatch && !selectedFound) {
 				$option.prop('selected', true);
 				selectedFound = true;
 			}
@@ -2412,6 +2537,136 @@ function rawSubmitDefault(btn){
 
 	// Populate the dropdown on page load
 	populateNetworkDropdown();
+
+	/* ---- API server fields for each network ---- */
+	var API_SETTINGS_KEY = 'rodWalletApiSettings';
+
+	function loadApiSettings() {
+		try {
+			var raw = window.localStorage.getItem(API_SETTINGS_KEY);
+			return raw ? JSON.parse(raw) : {};
+		} catch (e) { return {}; }
+	}
+
+	function saveApiSettings(settings) {
+		try { window.localStorage.setItem(API_SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* ignore */ }
+	}
+
+	function populateApiServerFields() {
+		var $container = $('#settingsApiServers');
+		if (!$container.length) return;
+		$container.empty();
+		var saved = loadApiSettings();
+		var driverOptions = [];
+		if (coinjs.explorer && coinjs.explorer.drivers) {
+			for (var d in coinjs.explorer.drivers) {
+				if (coinjs.explorer.drivers.hasOwnProperty(d)) driverOptions.push(d);
+			}
+		}
+		for (var code in coinjs.networks) {
+			if (!coinjs.networks.hasOwnProperty(code)) continue;
+			var net = coinjs.networks[code];
+			var apiUrl = (saved[code] && saved[code].apiUrl) || net.apiBase || '';
+			var apiType = (saved[code] && saved[code].apiType) || net.apiType || '';
+			var typeSelects = [];
+			for (var di = 0; di < driverOptions.length; di++) {
+				typeSelects.push('<option value="' + driverOptions[di] + '"' + (apiType === driverOptions[di] ? ' selected' : '') + '>' + driverOptions[di] + '</option>');
+			}
+			$container.append(
+				'<div class="row" style="margin-bottom:6px">' +
+				'<div class="col-xs-2" style="padding-top:6px;font-weight:bold;font-size:12px">' + code + '</div>' +
+				'<div class="col-xs-7"><input class="form-control input-sm js-net-api-url" data-chain="' + code + '" value="' + (apiUrl || '').replace(/"/g, '&quot;') + '" placeholder="API base URL"></div>' +
+				'<div class="col-xs-3"><select class="form-control input-sm js-net-api-type" data-chain="' + code + '">' + typeSelects.join('') + '</select></div>' +
+				'</div>'
+			);
+		}
+	}
+
+	$('#settingsSaveApis').on('click', function () {
+		var settings = {};
+		$('.js-net-api-url').each(function () {
+			var code = $(this).data('chain');
+			settings[code] = settings[code] || {};
+			settings[code].apiUrl = $.trim($(this).val());
+		});
+		$('.js-net-api-type').each(function () {
+			var code = $(this).data('chain');
+			settings[code] = settings[code] || {};
+			settings[code].apiType = $.trim($(this).val());
+		});
+		/* Apply to live coinjs.networks */
+		for (var code in settings) {
+			if (settings.hasOwnProperty(code) && coinjs.networks[code]) {
+				if (settings[code].apiUrl) coinjs.networks[code].apiBase = settings[code].apiUrl;
+				if (settings[code].apiType) coinjs.networks[code].apiType = settings[code].apiType;
+			}
+		}
+		/* Sync with OTC engine config if available */
+		if (window.rodOtc && window.rodOtc.engine) {
+			var ENGINE = window.rodOtc.engine;
+			var c = ENGINE.loadConfig();
+			if (settings.ROD && settings.ROD.apiUrl) c.rodApiUrl = settings.ROD.apiUrl;
+			c.altChains = c.altChains || {};
+			for (var ac in settings) {
+				if (ac !== 'ROD' && settings.hasOwnProperty(ac)) {
+					c.altChains[ac] = c.altChains[ac] || {};
+					if (settings[ac].apiUrl) c.altChains[ac].apiUrl = settings[ac].apiUrl;
+					if (settings[ac].apiType) c.altChains[ac].apiType = settings[ac].apiType;
+				}
+			}
+			ENGINE.saveConfig(c);
+		}
+		saveApiSettings(settings);
+		$('#settingsApiStatus').html('<span style="color:#62e6a6">Saved ✓</span>').fadeOut(3000).fadeIn(0);
+	});
+
+	/* Re-populate API fields when the network dropdown changes */
+	$('#coinjs_coin').on('change.apifields', function () {
+		/* no-op — fields stay for all networks; the dropdown only affects
+		   key generation, not which API fields are shown */
+	});
+
+	/* On page load, apply any saved API settings to coinjs.networks.
+	   Migrate stale entries: if a saved URL matches a known-broken default
+	   from an earlier version, discard it so the current built-in default
+	   takes effect instead. */
+	(function applySavedApiSettings() {
+		var saved = loadApiSettings();
+		var dirty = false;
+
+		/* URLs that shipped as defaults in prior versions but no longer work.
+		   If the user never customised them, localStorage still holds these
+		   stale values — silently drop them. */
+		var staleDefaults = {
+			'BCH': ['https://api.blockchair.com/bitcoin-cash'],
+			'DGB': ['https://api.blockchair.com/digibyte', 'https://dgb1.trezor.io']
+		};
+
+		for (var code in staleDefaults) {
+			if (saved[code] && staleDefaults[code]) {
+				for (var si = 0; si < staleDefaults[code].length; si++) {
+					if (saved[code].apiUrl === staleDefaults[code][si]) {
+						delete saved[code];
+						dirty = true;
+						break;
+					}
+				}
+			}
+		}
+
+		if (dirty) saveApiSettings(saved);
+
+		for (var c in saved) {
+			if (saved.hasOwnProperty(c) && coinjs.networks[c]) {
+				if (saved[c].apiUrl) coinjs.networks[c].apiBase = saved[c].apiUrl;
+				if (saved[c].apiType) coinjs.networks[c].apiType = saved[c].apiType;
+			}
+		}
+	})();
+
+	/* Populate only after stale shipped defaults have been removed, otherwise an
+	   upgraded wallet would display the old DGB endpoint and save it again. */
+	populateApiServerFields();
 
 	$("#coinjs_pub").val('0x'+(coinjs.pub).toString(16));
 	$("#coinjs_priv").val('0x'+(coinjs.priv).toString(16));

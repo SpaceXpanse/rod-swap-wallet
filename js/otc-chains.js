@@ -39,28 +39,6 @@
 			bech32Hrp: '',
 			segwit: false,
 			decimals: 8
-		},
-		/* Bitcoin mainnet — bitcoin/bitcoin src/chainparams.cpp. */
-		BTC: {
-			code: 'BTC',
-			pub: 0x00,
-			priv: 0x80,
-			multisig: 0x05,
-			bech32Hrp: 'bc',
-			segwit: true,
-			decimals: 8
-		},
-		/* Bitcoin Cash mainnet — retains Bitcoin's original version bytes.
-		   SegWit was never activated; BCH uses CashAddr (not bech32), but
-		   this wallet uses only legacy base58 addresses. */
-		BCH: {
-			code: 'BCH',
-			pub: 0x00,
-			priv: 0x80,
-			multisig: 0x05,
-			bech32Hrp: '',
-			segwit: false,
-			decimals: 8
 		}
 	};
 
@@ -129,30 +107,6 @@
 			   discardThreshold + 2 * minTxFee(1000 bytes) = 0.03 DOGE. */
 			changeThresholdSats: 3000000,
 			blockSeconds: 60
-		},
-		/* Bitcoin mainnet. DEFAULT_MIN_RELAY_TX_FEE = 1000 sat/kB = 1 sat/byte.
-		   Dust limit is 546 sats (3 × minRelayTxFee × size-of-spend). We
-		   construct at 2 sat/byte for reliable confirmation, since time-critical
-		   claim transactions must not sit unconfirmed past the refund deadline. */
-		BTC: {
-			feeRatePerByte: 2,
-			relayFloorPerByte: 1,
-			hardDustSats: 546,
-			softDustSats: 0,
-			dustSurchargeSats: 0,
-			changeThresholdSats: 546,
-			blockSeconds: 600
-		},
-		/* Bitcoin Cash mainnet. DEFAULT_MIN_RELAY_TX_FEE = 1000 sat/kB = 1 sat/byte.
-		   Same dust policy as BTC (546 sats). BCH has consistently low fees. */
-		BCH: {
-			feeRatePerByte: 2,
-			relayFloorPerByte: 1,
-			hardDustSats: 546,
-			softDustSats: 0,
-			dustSurchargeSats: 0,
-			changeThresholdSats: 546,
-			blockSeconds: 600
 		}
 	};
 
@@ -351,14 +305,17 @@
 	};
 
 	chainsModule.testAgainstRodGlobals = function(){
+		/* Save and restore the active network so this test works regardless of
+		   which coin the user has selected in the Settings tab. */
+		var previousNetwork = coinjs.activeNetwork || 'ROD';
+		coinjs.setNetwork('ROD');
+
 		var fixturePublicKey = '02cc2d342f2e3e6d013e19f9e5c1637e7e64d07d8a0caa13a4509198e882afb1f3';
 		var rodAddress = chainsModule.publicKeyToAddress('ROD', fixturePublicKey, 'legacy');
 		var expectedRodAddress = coinjs.pubkey2address(fixturePublicKey);
 		var beforeGlobals = JSON.stringify({pub: coinjs.pub, priv: coinjs.priv, multisig: coinjs.multisig, hrp: coinjs.bech32.hrp});
 		var ltcAddress = chainsModule.publicKeyToAddress('LTC', fixturePublicKey, 'legacy');
 		var dogeAddress = chainsModule.publicKeyToAddress('DOGE', fixturePublicKey, 'legacy');
-		var btcAddress = chainsModule.publicKeyToAddress('BTC', fixturePublicKey, 'legacy');
-		var bchAddress = chainsModule.publicKeyToAddress('BCH', fixturePublicKey, 'legacy');
 		var afterGlobals = JSON.stringify({pub: coinjs.pub, priv: coinjs.priv, multisig: coinjs.multisig, hrp: coinjs.bech32.hrp});
 
 		/* Dogecoin vectors generated independently with bitcoinjs-lib +
@@ -374,21 +331,6 @@
 			&& vectorMultisig.address === '9tAfWptDmGyYyFjKKr5VpApUKzq9hFpBJ1'
 			&& vectorMultisig.redeemScript === '52210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817982102c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee552ae';
 
-		/* Bitcoin vectors: the well-known generator-point pubkey produces the
-		   canonical "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH" P2PKH address. BTC and
-		   BCH share the same version bytes (pub 0x00, multisig 0x05), so their
-		   legacy addresses are byte-identical — the protocol is still safe
-		   because altChain is part of the hashed canonical terms. */
-		var btcP2pkh = chainsModule.publicKeyToAddress('BTC', vectorKey1, 'legacy');
-		var btcMultisig = chainsModule.publicKeysToMultisig('BTC', [vectorKey1, vectorKey2], 2);
-		var bchP2pkh = chainsModule.publicKeyToAddress('BCH', vectorKey1, 'legacy');
-		var bchMultisig = chainsModule.publicKeysToMultisig('BCH', [vectorKey1, vectorKey2], 2);
-		var btcVectorsMatch = btcP2pkh === '1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH'
-			&& btcMultisig.address === '33RQmypKhD6f4tMquiR5a3C6dRT7eBpaiG'
-			&& btcMultisig.redeemScript === '52210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817982102c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee552ae';
-		/* BCH legacy addresses are byte-identical to BTC (same version bytes) */
-		var bchVectorsMatch = bchP2pkh === btcP2pkh && bchMultisig.address === btcMultisig.address;
-
 		/* Dogecoin has no SegWit, so requesting a bech32 address must fail
 		   rather than silently mint an address no node will ever accept. */
 		var dogeBech32Rejected = false;
@@ -398,56 +340,27 @@
 			dogeBech32Rejected = true;
 		}
 
-		/* BCH has no SegWit either — bech32 must be refused */
-		var bchBech32Rejected = false;
-		try {
-			chainsModule.publicKeyToAddress('BCH', fixturePublicKey, 'bech32');
-		} catch(bchBech32Error){
-			bchBech32Rejected = true;
-		}
-
-		/* BTC DOES support bech32 — must succeed */
-		var btcBech32Works = false;
-		try {
-			var btcBech32Addr = chainsModule.publicKeyToAddress('BTC', vectorKey1, 'bech32');
-			btcBech32Works = btcBech32Addr.indexOf('bc1') === 0;
-		} catch(btcBech32Error){
-			btcBech32Works = false;
-		}
-
 		var policySane = chainsModule.getPolicy('DOGE').hardDustSats === 100000
 			&& chainsModule.minRelayFeeSats('DOGE', 300, [50000000]) === 30000
 			/* one soft-dust output adds exactly one 0.01 DOGE surcharge */
 			&& chainsModule.minRelayFeeSats('DOGE', 300, [500000]) === 1030000
-			&& chainsModule.minRelayFeeSats('LTC', 300, [500000]) === 300
-			/* BTC and BCH: simple fee-rate policy, no surcharges */
-			&& chainsModule.getPolicy('BTC').hardDustSats === 546
-			&& chainsModule.getPolicy('BCH').hardDustSats === 546
-			&& chainsModule.minRelayFeeSats('BTC', 300, [500000]) === 300
-			&& chainsModule.minRelayFeeSats('BCH', 300, [500000]) === 300;
+			&& chainsModule.minRelayFeeSats('LTC', 300, [500000]) === 300;
+
+		/* Restore the original network before returning */
+		coinjs.setNetwork(previousNetwork);
 
 		return {
 			name: 'Immutable chain helpers',
 			passed: rodAddress === expectedRodAddress && beforeGlobals === afterGlobals
 				&& ltcAddress !== rodAddress && dogeAddress !== rodAddress && dogeAddress !== ltcAddress
 				&& dogeAddress.charAt(0) === 'D'
-				&& btcAddress.charAt(0) === '1' && bchAddress.charAt(0) === '1'
-				&& btcAddress === bchAddress
-				&& vectorsMatch && dogeBech32Rejected && policySane
-				&& btcVectorsMatch && bchVectorsMatch
-				&& bchBech32Rejected && btcBech32Works,
+				&& vectorsMatch && dogeBech32Rejected && policySane,
 			rodAddress: rodAddress,
 			expectedRodAddress: expectedRodAddress,
 			ltcAddress: ltcAddress,
 			dogeAddress: dogeAddress,
-			btcAddress: btcAddress,
-			bchAddress: bchAddress,
 			dogeVectorsMatch: vectorsMatch,
-			btcVectorsMatch: btcVectorsMatch,
-			bchVectorsMatch: bchVectorsMatch,
 			dogeBech32Rejected: dogeBech32Rejected,
-			bchBech32Rejected: bchBech32Rejected,
-			btcBech32Works: btcBech32Works,
 			dogePolicySane: policySane,
 			globalsStable: beforeGlobals === afterGlobals
 		};

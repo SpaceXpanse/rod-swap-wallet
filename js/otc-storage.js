@@ -45,6 +45,37 @@
 		return Crypto.util.bytesToHex(Crypto.SHA256(Crypto.charenc.UTF8.stringToBytes(stableStringify(payload)), {asBytes: true}));
 	}
 
+	/* Sessions persisted before the alice/bob -> seller/buyer rename must keep
+	   working: an un-migrated role makes every role branch in the automation
+	   fall through, which also silences the refund monitor and can strand
+	   funds. Normalising here (the single read path for swap state) keeps
+	   legacy swaps visible and refundable. */
+	var LEGACY_ROLE = { alice: 'seller', bob: 'buyer' };
+	var LEGACY_STATE = { ALICE_ROD_FUNDED: 'SELLER_ROD_FUNDED', BOB_ALT_FUNDED: 'BUYER_ALT_FUNDED' };
+	function migrateLegacySession(session){
+		if(!session || typeof session !== 'object') return session;
+		if(LEGACY_ROLE[session.role]) session.role = LEGACY_ROLE[session.role];
+		if(LEGACY_STATE[session.state]) session.state = LEGACY_STATE[session.state];
+		if(session.terms){
+			if(session.terms.aliceChildPubKey && session.terms.sellerChildPubKey == null){
+				session.terms.sellerChildPubKey = session.terms.aliceChildPubKey;
+			}
+			if(session.terms.bobChildPubKey && session.terms.buyerChildPubKey == null){
+				session.terms.buyerChildPubKey = session.terms.bobChildPubKey;
+			}
+			delete session.terms.aliceChildPubKey;
+			delete session.terms.bobChildPubKey;
+		}
+		if(coinjs.isArray(session.timeline)){
+			for(var i = 0; i < session.timeline.length; i++){
+				var entry = session.timeline[i];
+				if(entry && LEGACY_STATE[entry.state]) entry.state = LEGACY_STATE[entry.state];
+			}
+		}
+		return session;
+	}
+	storageModule.migrateLegacySession = migrateLegacySession;
+
 	function sanitizeSession(session){
 		var sanitizedSession = {};
 		for(var propertyName in (session || {})){
@@ -52,7 +83,7 @@
 				sanitizedSession[propertyName] = session[propertyName];
 			}
 		}
-		return sanitizedSession;
+		return migrateLegacySession(sanitizedSession);
 	}
 
 	function sanitizeState(state){

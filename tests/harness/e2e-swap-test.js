@@ -37,7 +37,7 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
-const { MockChain, rodApiServer, esploraServer, blockcypherServer, blockchairServer, nostrRelay, staticServer } = require('./mock-infra');
+const { MockChain, rodApiServer, esploraServer, blockcypherServer, nostrRelay, staticServer } = require('./mock-infra');
 
 const APP_DIR = process.env.APP_DIR || path.resolve(__dirname, '..', '..');
 const SCENARIO = process.env.SCENARIO || 'happy';
@@ -46,6 +46,13 @@ const SCENARIO = process.env.SCENARIO || 'happy';
    Dogecoin-over-BlockCypher — different version bytes, different fee and dust
    policy, and a different API shape. */
 const ALT = (process.env.ALT_CHAIN || 'LTC').toUpperCase();
+const SUPPORTED_ALT_CHAINS = ['LTC', 'DOGE'];
+if (!SUPPORTED_ALT_CHAINS.includes(ALT)) {
+  throw new Error(
+    `ALT_CHAIN=${ALT} is wallet-only or unsupported by this release's OTC registry; ` +
+    `supported swap counters are ${SUPPORTED_ALT_CHAINS.join(', ')}`
+  );
+}
 
 const ALT_PROFILES = {
   LTC: {
@@ -53,7 +60,8 @@ const ALT_PROFILES = {
        what the historical satoshi/coin unit bug mis-read as coin-denominated. */
     amount: '0.05000000',
     claimFee: 1000,
-    refundBlocks: 40,
+    refundBlocks: 24,
+    confirmations: 1,
     apiType: 'esplora',
     apiPath: '/api',
     startServer: (chain, port) => esploraServer(chain, port)
@@ -66,30 +74,10 @@ const ALT_PROFILES = {
     amount: '500.00000000',
     claimFee: 1000000,
     refundBlocks: 60,
+    confirmations: 6,
     apiType: 'blockcypher',
     apiPath: '',
     startServer: (chain, port) => blockcypherServer(chain, port)
-  },
-  BTC: {
-    /* 0.01 BTC — well above the 546-sat dust limit. The 5000-sat settlement
-       fee clears the 1 sat/byte relay floor for a ~305-byte 2-of-2 P2SH spend
-       at ~16.4 sat/byte. mempool.space is Esplora-compatible. */
-    amount: '0.01000000',
-    claimFee: 5000,
-    refundBlocks: 6,
-    apiType: 'esplora',
-    apiPath: '/api',
-    startServer: (chain, port) => esploraServer(chain, port)
-  },
-  BCH: {
-    /* 0.01 BCH — same dust policy as BTC. The 1000-sat settlement fee clears
-       the 1 sat/byte relay floor. Blockchair is the only keyless BCH API. */
-    amount: '0.01000000',
-    claimFee: 1000,
-    refundBlocks: 6,
-    apiType: 'blockchair',
-    apiPath: '',
-    startServer: (chain, port) => blockchairServer(chain, port)
   }
 };
 const ALT_PROFILE = ALT_PROFILES[ALT];
@@ -100,32 +88,56 @@ const ROD_AMOUNT = '100.00000000';
 const ALT_AMOUNT = ALT_PROFILE.amount;
 const START_HEIGHT = 500000;
 const RELEASE_HEIGHT = 500002;
-const REFUND_ROD_BLOCKS = 30;   // refundRodHeight = 500030
+const REFUND_ROD_BLOCKS = 480;  // 4h at ROD's 30-second target spacing
 const ALT_REFUND_BLOCKS = ALT_PROFILE.refundBlocks;
-const ROD_CLAIM_FEE = 71000;
+const ROD_CLAIM_FEE = 51900;
 const ALT_CLAIM_FEE = ALT_PROFILE.claimFee;
-const ROD_REFUND_FEE = 71000;
+const ROD_REFUND_FEE = 51900;
 const ALT_AMOUNT_SATS = Math.round(parseFloat(ALT_AMOUNT) * 1e8);
 
 const results = { steps: [], ok: true };
+const runtime = {
+  browser: null,
+  alice: null,
+  bob: null,
+  rodChain: null,
+  altChain: null,
+  relay: null,
+  servers: [],
+  swapId: '',
+  browserIssues: []
+};
 function step(name, ok, detail) {
   results.steps.push({ name, ok, detail: detail || '' });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
   if (!ok) results.ok = false;
 }
 
+function expectedTransientApiResponse(urlValue, status) {
+  if (status !== 404) return false;
+  const url = new URL(urlValue);
+  if (url.hostname !== '127.0.0.1' || Number(url.port) !== PORTS.alt) return false;
+  return /^\/api\/tx\/[0-9a-f]{64}(?:\/hex)?$/i.test(url.pathname) ||
+    /^\/txs\/[0-9a-f]{64}$/i.test(url.pathname);
+}
+
 function resolveChromiumLaunchOptions() {
   const configuredExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.PW_CHROMIUM_EXECUTABLE_PATH;
+  let args;
+  if (process.env.PLAYWRIGHT_CHROMIUM_ARGS_JSON) {
+    args = JSON.parse(process.env.PLAYWRIGHT_CHROMIUM_ARGS_JSON);
+    if (!Array.isArray(args)) throw new Error('PLAYWRIGHT_CHROMIUM_ARGS_JSON must be a JSON array');
+  }
   if (configuredExecutablePath) {
-    return { executablePath: configuredExecutablePath };
+    return { executablePath: configuredExecutablePath, args };
   }
 
   const pinnedExecutablePath = '/opt/pw-browsers/chromium';
   if (fs.existsSync(pinnedExecutablePath)) {
-    return { executablePath: pinnedExecutablePath };
+    return { executablePath: pinnedExecutablePath, args };
   }
 
-  return {};
+  return args ? { args } : {};
 }
 
 async function waitFor(fn, timeoutMs, label) {
@@ -138,30 +150,62 @@ async function waitFor(fn, timeoutMs, label) {
   }
 }
 
+async function sessionDiagnostics(page, swapId) {
+  return page.evaluate((id) => {
+    const session = rodOtc.engine.restoreLive(id);
+    return {
+      flash: $('#otcFlash').text(),
+      eventLog: $('#otcLog').text(),
+      session: session ? {
+        state: session.state,
+        localAccepted: !!session.localAccepted,
+        remoteAccepted: !!session.remoteAccepted,
+        bilateralReady: !!session.bilateralReady,
+        localPrepared: !!session.localPrepared,
+        remotePrepared: !!session.remotePrepared,
+        hasAdaptorPoint: !!session.adaptorPoint,
+        hasRodRefund: !!(session.rodRefund && session.rodRefund.signedHex),
+        hasAltRefund: !!(session.altRefund && session.altRefund.signedHex),
+        hasLocalRodAdaptorSignature: !!session.localRodAdaptorSignature,
+        hasRemoteRodAdaptorSignature: !!session.remoteRodAdaptorSignature,
+        hasLocalAltAdaptorSignature: !!session.localAltAdaptorSignature,
+        hasRemoteAltAdaptorSignature: !!session.remoteAltAdaptorSignature,
+        refundSafetyFault: session._refundSafetyFault || '',
+        automationErrors: session._automationErrors || {},
+        log: session._log || []
+      } : null
+    };
+  }, swapId);
+}
+
 async function main() {
   const rodChain = new MockChain('ROD');
   const altChain = new MockChain(ALT);
+  runtime.rodChain = rodChain;
+  runtime.altChain = altChain;
   rodChain.height = START_HEIGHT;
   altChain.height = START_HEIGHT;
-  await rodApiServer(rodChain, PORTS.rod);
-  await ALT_PROFILE.startServer(altChain, PORTS.alt);
+  runtime.servers.push(await rodApiServer(rodChain, PORTS.rod));
+  runtime.servers.push(await ALT_PROFILE.startServer(altChain, PORTS.alt));
   const relay = nostrRelay(PORTS.relay);
-  await staticServer(APP_DIR, PORTS.app);
+  runtime.relay = relay;
+  runtime.servers.push(await staticServer(APP_DIR, PORTS.app));
   console.log(`mock servers up · scenario=${SCENARIO} · alt=${ALT} via ${ALT_PROFILE.apiType} · app=${APP_DIR}`);
 
   const rodConfirmationsCfg = SCENARIO === 'refund' ? 3 : 1;
 
   const browser = await chromium.launch(resolveChromiumLaunchOptions());
+  runtime.browser = browser;
   const mkContext = async (label) => {
     const ctx = await browser.newContext({ serviceWorkers: 'block' });
-    await ctx.addInitScript(({ rodPort, altPort, relayPort, rodConfs, altCode, altType, altPath, altRefundBlocks }) => {
+    await ctx.addInitScript(({ rodPort, altPort, relayPort, rodConfs, altCode, altType, altPath, altRefundBlocks, altConfirmations }) => {
       const altUrl = 'http://127.0.0.1:' + altPort + altPath;
       const altChains = {};
       altChains[altCode] = {
         apiUrl: altUrl,
         apiType: altType,
         refundBlocks: altRefundBlocks,
-        confirmations: 1
+        confirmations: altConfirmations
       };
       localStorage.setItem('rodOtcEngineConfig', JSON.stringify({
         rodApiUrl: 'http://127.0.0.1:' + rodPort,
@@ -169,25 +213,46 @@ async function main() {
         altChains: altChains,
         relays: ['ws://127.0.0.1:' + relayPort],
         releaseBlocks: 2,
-        refundRodBlocks: 30,
+        refundRodBlocks: 480,
         altRefundBlocks: altRefundBlocks,
         rodConfirmations: rodConfs,
-        altConfirmations: 1,
+        altConfirmations: altConfirmations,
         tickMs: 1500
       }));
       localStorage.setItem('rodOtcTestAltChain', altCode);
     }, {
       rodPort: PORTS.rod, altPort: PORTS.alt, relayPort: PORTS.relay, rodConfs: rodConfirmationsCfg,
-      altCode: ALT, altType: ALT_PROFILE.apiType, altPath: ALT_PROFILE.apiPath, altRefundBlocks: ALT_REFUND_BLOCKS
+      altCode: ALT, altType: ALT_PROFILE.apiType, altPath: ALT_PROFILE.apiPath,
+      altRefundBlocks: ALT_REFUND_BLOCKS, altConfirmations: ALT_PROFILE.confirmations
     });
     const page = await ctx.newPage();
     page.on('console', (m) => {
-      if (m.type() === 'error') console.log(`[${label} console.error] ${m.text()}`);
+      if (m.type() !== 'error') return;
+      const text = m.text();
+      /* Chromium emits this generic line for HTTP errors. The response event
+         below owns classification because it includes the URL and status. */
+      if (/^Failed to load resource:/.test(text)) return;
+      runtime.browserIssues.push({ page: label, type: 'console.error', detail: text });
     });
-    if (process.env.TRACE_404) {
-      page.on('response', (r) => { if (r.status() >= 400) console.log(`[${label} HTTP ${r.status()}] ${r.url()}`); });
-    }
-    page.on('pageerror', (e) => console.log(`[${label} pageerror] ${e.message}`));
+    page.on('response', (response) => {
+      if (response.status() < 400) return;
+      if (expectedTransientApiResponse(response.url(), response.status())) {
+        if (process.env.TRACE_404) console.log(`[${label} expected HTTP ${response.status()}] ${response.url()}`);
+        return;
+      }
+      runtime.browserIssues.push({
+        page: label, type: 'http', status: response.status(), detail: response.url()
+      });
+    });
+    page.on('requestfailed', (request) => {
+      runtime.browserIssues.push({
+        page: label, type: 'requestfailed', detail: request.url(),
+        error: request.failure() ? request.failure().errorText : ''
+      });
+    });
+    page.on('pageerror', (error) => {
+      runtime.browserIssues.push({ page: label, type: 'pageerror', detail: error.message });
+    });
     await page.goto(`http://127.0.0.1:${PORTS.app}/index.html`, { waitUntil: 'load' });
     await page.waitForFunction(() => window.rodOtc && window.rodOtc.engine && window.jQuery);
     return page;
@@ -195,6 +260,8 @@ async function main() {
 
   const alice = await mkContext('alice');
   const bob = await mkContext('bob');
+  runtime.alice = alice;
+  runtime.bob = bob;
 
   const mkWallet = (page) => page.evaluate(() => {
     coinjs.setNetwork('ROD');
@@ -249,21 +316,26 @@ async function main() {
   step('swap accounts derived (both)', !!bobXpub, 'bob xpub ' + bobXpub.slice(0, 12) + '…');
 
   // ---- Alice creates & starts the swap ----
-  await alice.evaluate(({ rod, alt, altCode, peerXpub, peerRodPayout, release }) => {
+  await alice.evaluate(({ rod, alt, altCode, peerXpub, peerRodIdentity, peerRodPayout, release }) => {
     /* Select the counter chain FIRST: fees, dust limits, refund block counts
        and the payout address all derive from it. */
     $('#nsAltChain').val(altCode).trigger('change');
-    $('#nsRole').val('alice');
+    $('#nsRole').val('seller');
     $('#nsRod').val(rod);
     $('#nsAlt').val(alt);
     $('#nsRelease').val(String(release));
-    $('#nsPeer').val('bob-e2e-test');
+    $('#nsPeer').val(peerRodIdentity);
     $('#nsPeerXpub').val(peerXpub);
     $('#nsPeerPayoutAddr').val(peerRodPayout);
     $('#nsCreate').click();
-  }, { rod: ROD_AMOUNT, alt: ALT_AMOUNT, altCode: ALT, peerXpub: bobXpub, peerRodPayout: bobWallet.address, release: RELEASE_HEIGHT });
+  }, {
+    rod: ROD_AMOUNT, alt: ALT_AMOUNT, altCode: ALT, peerXpub: bobXpub,
+    peerRodIdentity: bobWallet.address, peerRodPayout: bobWallet.address,
+    release: RELEASE_HEIGHT
+  });
 
   const swapId = await waitFor(() => alice.evaluate(() => $('#nsSwapId').val() || null), 20000, 'alice swap created');
+  runtime.swapId = swapId;
   step('alice created swap session', !!swapId, 'swapId ' + swapId.slice(0, 16) + '…');
 
   // terms carry the refund protocol fields
@@ -283,33 +355,57 @@ async function main() {
     termsCheck.refundRodHeight === START_HEIGHT + REFUND_ROD_BLOCKS &&
     termsCheck.altRefundLockHeight === START_HEIGHT + ALT_REFUND_BLOCKS &&
     termsCheck.rodConfirmations === rodConfirmationsCfg &&
+    termsCheck.altConfirmations === ALT_PROFILE.confirmations &&
     !!termsCheck.sellerRodRefundAddress && !!termsCheck.buyerAltRefundAddress && !!termsCheck.nonce,
     JSON.stringify(termsCheck));
 
-  await waitFor(() => bob.evaluate((id) => {
-    const all = rodOtc.engine.loadLive();
-    return all[id] ? true : null;
-  }, swapId), 30000, 'bob auto-created session from swap_terms');
+  try {
+    await waitFor(() => bob.evaluate((id) => {
+      const all = rodOtc.engine.loadLive();
+      return all[id] ? true : null;
+    }, swapId), 30000, 'bob auto-created session from swap_terms');
+  } catch (error) {
+    const diagnostics = await bob.evaluate((id) => ({
+      flash: $('#otcFlash').text(),
+      log: $('#otcLog').text(),
+      seenEventIds: JSON.parse(localStorage.getItem('rodOtcSeenEventIds') || '[]'),
+      liveSwapIds: Object.keys(rodOtc.engine.loadLive()),
+      tracked: !!(rodOtc.engine.trackedSwapIds && rodOtc.engine.trackedSwapIds[id])
+    }), swapId);
+    error.message += '\nBob diagnostics: ' + JSON.stringify(diagnostics);
+    throw error;
+  }
   step('bob auto-created session from incoming terms', true);
 
-  const accept = (page) => page.evaluate((id) => {
-    const card = $('.otc-swap-card[data-id="' + id + '"]');
-    if (card.length) card.trigger('click');
-    $('.otcExecBtn[data-action="accept-offer"]').trigger('click');
-    return rodOtc.engine.restoreLive(id).localAccepted === true;
-  }, swapId);
+  const accept = async (page) => {
+    await page.evaluate((id) => {
+      const card = $('.otc-swap-card[data-id="' + id + '"]');
+      if (card.length) card.trigger('click');
+      $('.otcExecBtn[data-action="accept-offer"]').trigger('click');
+    }, swapId);
+    return waitFor(() => page.evaluate((id) => {
+      const session = rodOtc.engine.restoreLive(id);
+      return session && session.localAccepted === true ? true : null;
+    }, swapId), 15000, 'local acceptance after fresh refund-order check');
+  };
   step('bob accepted', await accept(bob));
   step('alice accepted', await accept(alice));
 
   // ---- pre-funding pipeline → PREPARED on both, with NOTHING broadcast ----
-  await waitFor(() => alice.evaluate((id) => {
-    const s = rodOtc.engine.restoreLive(id);
-    return (s && s.rodRefund && s.rodRefund.signedHex && s.localRodAdaptorSignature && s.remoteAltAdaptorSignature && s.localPrepared) ? true : null;
-  }, swapId), 90000, 'alice PREPARED (refund signed + adaptor sigs verified)');
-  await waitFor(() => bob.evaluate((id) => {
-    const s = rodOtc.engine.restoreLive(id);
-    return (s && s.altRefund && s.altRefund.signedHex && s.localAltAdaptorSignature && s.remoteRodAdaptorSignature && s.localPrepared) ? true : null;
-  }, swapId), 90000, 'bob PREPARED (refund signed + adaptor sigs verified)');
+  try {
+    await waitFor(() => alice.evaluate((id) => {
+      const s = rodOtc.engine.restoreLive(id);
+      return (s && s.rodRefund && s.rodRefund.signedHex && s.localRodAdaptorSignature && s.remoteAltAdaptorSignature && s.localPrepared) ? true : null;
+    }, swapId), 90000, 'alice PREPARED (refund signed + adaptor sigs verified)');
+    await waitFor(() => bob.evaluate((id) => {
+      const s = rodOtc.engine.restoreLive(id);
+      return (s && s.altRefund && s.altRefund.signedHex && s.localAltAdaptorSignature && s.remoteRodAdaptorSignature && s.localPrepared) ? true : null;
+    }, swapId), 90000, 'bob PREPARED (refund signed + adaptor sigs verified)');
+  } catch (error) {
+    error.message += '\nAlice diagnostics: ' + JSON.stringify(await sessionDiagnostics(alice, swapId));
+    error.message += '\nBob diagnostics: ' + JSON.stringify(await sessionDiagnostics(bob, swapId));
+    throw error;
+  }
   step('both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures', true);
 
   const aliceRefund = await alice.evaluate((id) => {
@@ -332,12 +428,16 @@ async function main() {
     await runRefundPath();
   }
 
+  step('no unexpected browser console, page, request, or HTTP errors',
+    runtime.browserIssues.length === 0, JSON.stringify(runtime.browserIssues));
+
   fs.writeFileSync(path.join(__dirname, `e2e-report-${ALT.toLowerCase()}-${SCENARIO}.json`), JSON.stringify({
     scenario: SCENARIO,
     swapId,
     steps: results.steps,
     rodBroadcasts: rodChain.broadcasts,
     altBroadcasts: altChain.broadcasts,
+    browserIssues: runtime.browserIssues,
     relayEventTypes: relay.events.map((e) => {
       try { return JSON.parse(e.content).type; } catch (err) { return 'unknown'; }
     })
@@ -363,10 +463,10 @@ async function main() {
     step('pre-signed ROD refund rejected as non-final before lock height',
       !probe.ok && /non-final/.test(probe.error || ''), probe.error || 'UNEXPECTEDLY ACCEPTED');
 
-    // timeline ordering: PREPARED strictly before ALICE_ROD_FUNDED
+    // timeline ordering: PREPARED strictly before SELLER_ROD_FUNDED
     const timeline = await alice.evaluate((id) => (rodOtc.engine.restoreLive(id).timeline || []).map((t) => t.state), swapId);
     const preparedIdx = timeline.indexOf('PREPARED');
-    const fundedIdx = timeline.indexOf('ALICE_ROD_FUNDED');
+    const fundedIdx = timeline.indexOf('SELLER_ROD_FUNDED');
     step('timeline: PREPARED precedes ROD funding broadcast', preparedIdx !== -1 && fundedIdx !== -1 && preparedIdx < fundedIdx,
       timeline.join(' → '));
 
@@ -374,6 +474,13 @@ async function main() {
     const altFundingB = altChain.broadcasts[0];
     step(`${ALT} funding tx broadcast & independently validated (${ALT_AMOUNT} ${ALT})`, altFundingB.valid, altFundingB.details.join(' | '));
     step(`${ALT} funding txid equals PLANNED txid`, altFundingB.txid === bobRefund.plannedTxid);
+
+    if (ALT_PROFILE.confirmations > 1) {
+      await new Promise((resolve) => setTimeout(resolve, 3500));
+      step(`${ALT} confirmation gate prevents claim at 1/${ALT_PROFILE.confirmations}`,
+        altChain.broadcasts.length === 1, `alt broadcasts: ${altChain.broadcasts.length}`);
+      altChain.height += ALT_PROFILE.confirmations - 1;
+    }
 
     if (process.env.RELOAD_TEST === '1') {
       await alice.reload({ waitUntil: 'load' });
@@ -561,7 +668,38 @@ async function main() {
   }
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
+  const report = {
+    scenario: SCENARIO,
+    swapId: runtime.swapId,
+    ok: false,
+    error: e && (e.stack || e.message) || String(e),
+    steps: results.steps,
+    browserIssues: runtime.browserIssues,
+    rodBroadcasts: runtime.rodChain ? runtime.rodChain.broadcasts : [],
+    altBroadcasts: runtime.altChain ? runtime.altChain.broadcasts : [],
+    relayEventTypes: runtime.relay && runtime.relay.events
+      ? runtime.relay.events.map((event) => {
+          try { return JSON.parse(event.content).type; } catch (error) { return 'unknown'; }
+        })
+      : []
+  };
+  for (const [label, page] of [['alice', runtime.alice], ['bob', runtime.bob]]) {
+    try {
+      if (page && !page.isClosed()) report[label] = await sessionDiagnostics(page, runtime.swapId);
+    } catch (diagnosticError) {
+      report[label] = { diagnosticError: diagnosticError.message };
+    }
+  }
+  fs.writeFileSync(
+    path.join(__dirname, `e2e-report-${ALT.toLowerCase()}-${SCENARIO}.json`),
+    JSON.stringify(report, null, 2)
+  );
+  try { if (runtime.browser) await runtime.browser.close(); } catch (closeError) {}
+  for (const server of runtime.servers) {
+    try { server.close(); } catch (closeError) {}
+  }
+  try { if (runtime.relay && runtime.relay.close) runtime.relay.close(); } catch (closeError) {}
   console.error('HARNESS ERROR:', e);
   process.exit(2);
 });

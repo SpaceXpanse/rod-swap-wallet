@@ -23,14 +23,11 @@
  * Backends
  * --------
  * esplora      Blockstream Esplora and its forks (litecoinspace.org for LTC,
- *              mempool.space for BTC; a self-hosted electrs for DOGE/BCH).
- *              Native shape, passthrough.
+ *              digiexplorer.info for DGB, or self-hosted electrs-doge for
+ *              DOGE). Native shape, passthrough.
  * blockcypher  The default for Dogecoin: the only keyless public API serving
  *              permissive CORS, raw transaction hex AND a spending-tx lookup,
  *              all three of which this protocol requires.
- * blockchair   The default for Bitcoin Cash: the only keyless API with CORS,
- *              raw hex, and spending-tx lookup for BCH. Can also serve BTC
- *              and other chains if operators prefer it.
  *
  * Load order: after coin.js (needs coinjs.ajax) and before any module that
  * performs chain I/O.
@@ -179,14 +176,8 @@
 		},
 		tipHeight: function (base) {
 			return getText(base + '/blocks/tip/height').then(function (body) {
-				/* Strict parse. coinjs.ajax hands 4xx/5xx bodies to the success
-				   path, so stripping non-digits from an HTML error page used to
-				   yield a plausible height ("502 Bad Gateway" -> 502) and a
-				   bogus tip silently withholds a matured timelocked refund. */
-				var text = String(body == null ? '' : body).replace(/^\s+|\s+$/g, '').replace(/^"|"$/g, '');
-				if (!/^[0-9]{1,9}$/.test(text)) return deferred().reject('Invalid tip height: ' + text).promise();
-				var height = parseInt(text, 10);
-				if (height <= 0) return deferred().reject('Invalid tip height: ' + text).promise();
+				var height = toInt(String(body).replace(/[^0-9]/g, ''), 0);
+				if (height <= 0) return deferred().reject('Invalid tip height: ' + body).promise();
 				return height;
 			});
 		},
@@ -252,11 +243,7 @@
 			vin: vin,
 			vout: vout,
 			hex: tx.hex || '',
-			/* Never carry a reported confirmation count for a transaction that
-			   is not in a block: BlockCypher returns block_height -1 alongside
-			   a non-zero "confirmations" for mempool entries, which would make
-			   a mempool-only (or fabricated) funding read as deeply confirmed. */
-			confirmations: confirmed ? toInt(tx.confirmations, 1) : 0,
+			confirmations: toInt(tx.confirmations, confirmed ? 1 : 0),
 			status: { confirmed: confirmed, block_height: confirmed ? height : 0 }
 		};
 	}
@@ -338,89 +325,26 @@
 	/* ------------------------------------------------------------------
 	   Driver: Blockchair
 
-	   Docs: https://blockchair.com/api/docs
-	   Base: https://api.blockchair.com/bitcoin-cash (or /bitcoin, etc.)
-	   The only keyless public API serving CORS, raw transaction hex AND a
-	   spending-tx lookup for Bitcoin Cash. All amounts are integer satoshis.
-
-	   Blockchair's JSON is deeply nested under data[key]; the mapping below
-	   normalises it into the Esplora shape the rest of the wallet expects.
+	   Docs: https://blockchair.com/api
+	   Base: https://api.blockchair.com/bitcoin-cash  (or /digibyte, etc.)
+	   Amounts are always integer base units. The dashboards endpoint wraps
+	   everything under data[address].address (balance, utxo, transactions).
 	   ------------------------------------------------------------------ */
-
-	/* Blockchair models a transaction's INPUTS as the output records it consumes,
-	   so each input carries BOTH ends of the link: transaction_hash / index are
-	   the PREVOUT (what Esplora calls vin[].txid / vin[].vout), while
-	   spending_* describe this very transaction. Reading spending_transaction_hash
-	   as the prevout would make every vin point at itself. */
-	function blockchairTxToEsplora(txData) {
-		var transaction = txData.transaction || {};
-		var inputs = txData.inputs || [];
-		var outputs = txData.outputs || [];
-		var vin = [];
-		for (var i = 0; i < inputs.length; i++) {
-			vin.push({
-				txid: inputs[i].transaction_hash || '',
-				vout: toInt(inputs[i].index, 0),
-				scriptsig: inputs[i].spending_signature_hex || '',
-				sequence: toInt(inputs[i].spending_sequence, 0xffffffff),
-				prevout: {
-					value: baseUnits(inputs[i].value || 0),
-					scriptpubkey_address: inputs[i].recipient || ''
-				}
-			});
-		}
-		/* Index by Blockchair's DECLARED output index, not by array position.
-		   The API does not promise ordering, and an off-by-position vout makes
-		   outspend() report on the wrong output - which on the alt leg means
-		   the counterparty's claim is never fetched and the adaptor secret is
-		   never recovered, degrading a completable swap into a refund race. */
-		var vout = [];
-		for (var j = 0; j < outputs.length; j++) {
-			var outIndex = toInt(outputs[j].index, j);
-			vout[outIndex] = {
-				n: outIndex,
-				value: baseUnits(outputs[j].value),
-				scriptpubkey: outputs[j].script_hex || '',
-				scriptpubkey_address: outputs[j].recipient || '',
-				/* preserve for outspend lookup */
-				spending_transaction_hash: outputs[j].spending_transaction_hash || ''
-			};
-		}
-		for (var k = 0; k < vout.length; k++) {
-			if (!vout[k]) vout[k] = { n: k, value: 0, scriptpubkey: '', scriptpubkey_address: '', spending_transaction_hash: '' };
-		}
-		var height = toInt(transaction.block_id, -1);
-		var confirmed = height > 0;
-		return {
-			txid: transaction.hash || '',
-			version: toInt(transaction.version, 1),
-			locktime: toInt(transaction.lock_time, 0),
-			size: toInt(transaction.size, 0),
-			fee: baseUnits(transaction.fee || 0),
-			vin: vin,
-			vout: vout,
-			hex: '',
-			confirmations: confirmed ? 1 : 0,
-			status: { confirmed: confirmed, block_height: confirmed ? height : 0 }
-		};
-	}
 
 	var blockchairDriver = {
 		name: 'blockchair',
-		/* limit is "{transactions},{utxo}" on this endpoint. We never read the
-		   transaction list, but the utxo cap must stay high — a bare limit=0
-		   would return an EMPTY utxo array, which reads as "address unfunded"
-		   and would stall a swap waiting for funding that already landed. */
 		utxos: function (base, address) {
-			return getJson(base + '/dashboards/address/' + encodeURIComponent(address) + '?limit=0,10000').then(function (resp) {
-				var data = resp && resp.data && resp.data[address];
-				if (!data) return deferred().reject('Unexpected Blockchair address response').promise();
-				var utxoList = data.utxo || [];
+			var url = base + '/dashboards/address/' + encodeURIComponent(address) + '?limit=100';
+			return getJson(url).then(function (data) {
+				if (!data || !data.data || !data.data[address]) {
+					return deferred().reject('Blockchair: unexpected response for ' + address).promise();
+				}
+				var utxoList = data.data[address].utxo || [];
 				var out = [];
 				for (var i = 0; i < utxoList.length; i++) {
 					var u = utxoList[i];
 					out.push({
-						txid: u.transaction_hash || '',
+						txid: u.transaction_hash,
 						vout: toInt(u.index, 0),
 						value: baseUnits(u.value),
 						scriptpubkey: '',
@@ -431,65 +355,230 @@
 			});
 		},
 		balance: function (base, address) {
-			return getJson(base + '/dashboards/address/' + encodeURIComponent(address) + '?limit=0,0').then(function (resp) {
-				var data = resp && resp.data && resp.data[address];
-				if (!data) return deferred().reject('Unexpected Blockchair balance response').promise();
-				return baseUnits((data.address && data.address.balance) || 0);
+			var url = base + '/dashboards/address/' + encodeURIComponent(address);
+			return getJson(url).then(function (data) {
+				if (!data || !data.data || !data.data[address]) {
+					return deferred().reject('Blockchair: unexpected response for ' + address).promise();
+				}
+				var info = data.data[address].address;
+				return baseUnits(info.balance || 0);
 			});
 		},
 		tx: function (base, txid) {
-			return getJson(base + '/dashboards/transaction/' + encodeURIComponent(txid)).then(function (resp) {
-				var txData = resp && resp.data && resp.data[txid];
-				if (!txData) return deferred().reject('Transaction not found: ' + txid).promise();
-				return blockchairTxToEsplora(txData);
+			var url = base + '/dashboards/transaction/' + encodeURIComponent(txid);
+			return getJson(url).then(function (data) {
+				if (!data || !data.data || !data.data[txid]) {
+					return deferred().reject('Blockchair: unknown transaction ' + txid).promise();
+				}
+				var txData = data.data[txid];
+				var tx = txData.transaction || {};
+				var inputs = txData.inputs || [];
+				var outputs = txData.outputs || [];
+				var vin = [];
+				for (var i = 0; i < inputs.length; i++) {
+					vin.push({
+						/* Blockchair describes the output being spent here.
+						   transaction_hash/index identify that prevout;
+						   spending_* identify the transaction currently being
+						   viewed and must never be fed back as its own input. */
+						txid: inputs[i].transaction_hash || '',
+						vout: toInt(inputs[i].index, 0),
+						scriptsig: inputs[i].spending_signature_hex || '',
+						sequence: toInt(inputs[i].spending_sequence, 0xffffffff),
+						prevout: {
+							value: baseUnits(inputs[i].value || 0),
+							scriptpubkey_address: inputs[i].recipient || ''
+						}
+					});
+				}
+				var vout = [];
+				for (var j = 0; j < outputs.length; j++) {
+					vout.push({
+						n: toInt(outputs[j].index, j),
+						value: baseUnits(outputs[j].value),
+						scriptpubkey: outputs[j].script_hex || '',
+						scriptpubkey_address: outputs[j].recipient || '',
+						spent_by: outputs[j].spending_transaction_hash || ''
+					});
+				}
+				var height = toInt(tx.block_id, -1);
+				var confirmed = height > 0;
+				return {
+					txid: tx.hash || txid,
+					version: toInt(tx.version, 1),
+					locktime: toInt(tx.lock_time, 0),
+					size: toInt(tx.size, 0),
+					fee: baseUnits(tx.fee || 0),
+					vin: vin,
+					vout: vout,
+					hex: tx.raw_hex || '',
+					confirmations: confirmed ? 1 : 0,
+					status: { confirmed: confirmed, block_height: confirmed ? height : 0 }
+				};
 			});
 		},
 		txHex: function (base, txid) {
-			return getJson(base + '/raw/transaction/' + encodeURIComponent(txid)).then(function (resp) {
-				var raw = resp && resp.data && resp.data[txid] && resp.data[txid].raw_transaction;
-				if (!raw || !/^[0-9a-f]+$/i.test(raw)) {
-					return deferred().reject('Blockchair returned no raw tx hex for ' + txid).promise();
-				}
-				return raw;
+			var url = base + '/raw/transaction/' + encodeURIComponent(txid);
+			return getJson(url).then(function (data) {
+				var hex = data && data.data && data.data[txid] && data.data[txid].raw_transaction;
+				if (hex && /^[0-9a-f]+$/i.test(hex)) return hex;
+				return deferred().reject('Blockchair returned no raw tx hex for ' + txid).promise();
 			});
 		},
 		outspend: function (base, txid, vout) {
 			return blockchairDriver.tx(base, txid).then(function (tx) {
 				var out = tx.vout[toInt(vout, 0)];
 				if (!out) return { spent: false };
-				return out.spending_transaction_hash
-					? { spent: true, txid: out.spending_transaction_hash }
-					: { spent: false };
+				return out.spent_by ? { spent: true, txid: out.spent_by } : { spent: false };
 			});
 		},
 		tipHeight: function (base) {
-			return getJson(base + '/stats').then(function (resp) {
-				var height = toInt(resp && resp.data && resp.data.blocks, 0);
+			return getJson(base + '/stats').then(function (data) {
+				var height = data && data.data && toInt(data.data.blocks, 0);
 				if (height <= 0) return deferred().reject('Invalid Blockchair tip height').promise();
 				return height;
 			});
 		},
 		broadcast: function (base, txhex) {
-			return postRaw(base + '/push/transaction', 'data=' + encodeURIComponent(txhex), 'application/x-www-form-urlencoded')
+			return postRaw(base + '/push/transaction', JSON.stringify({ data: txhex }), 'application/json')
 				.then(function (body) {
 					var parsed;
-					try {
-						parsed = JSON.parse(body);
-					} catch (e) {
+					try { parsed = JSON.parse(body); } catch (e) {
 						return { success: false, txid: '', error: body || 'Broadcast failed', raw: body };
 					}
-					var txidResult = parsed && parsed.data && parsed.data.transaction_hash;
-					if (txidResult) return { success: true, txid: txidResult, error: '', raw: parsed };
+					var txid = parsed && parsed.data && parsed.data.transaction_hash;
+					if (txid) return { success: true, txid: txid, error: '', raw: parsed };
 					var message = (parsed && parsed.context && parsed.context.error) || 'Broadcast failed';
 					return { success: false, txid: '', error: message, raw: parsed };
 				});
 		}
 	};
 
+	/* ------------------------------------------------------------------
+	   Driver: Blockbook (Trezor)
+
+	   Docs: https://github.com/trezor/blockbook/blob/master/docs/api.md
+	   Bases: https://bch1.trezor.io  etc.
+	   All amounts are string satoshi / base-unit integers. CORS enabled.
+	   ------------------------------------------------------------------ */
+
+	var blockbookDriver = {
+		name: 'blockbook',
+		utxos: function (base, address) {
+			return getJson(base + '/api/v2/utxo/' + encodeURIComponent(address) + '?confirmed=false').then(function (list) {
+				if (!coinjs.isArray(list)) {
+					return deferred().reject('Unexpected Blockbook UTXO response').promise();
+				}
+				var out = [];
+				for (var i = 0; i < list.length; i++) {
+					var u = list[i];
+					out.push({
+						txid: u.txid,
+						vout: toInt(u.vout, 0),
+						value: baseUnits(u.value),
+						scriptpubkey: u.scriptPubKey || '',
+						confirmations: toInt(u.confirmations, 0)
+					});
+				}
+				return out;
+			});
+		},
+		balance: function (base, address) {
+			return getJson(base + '/api/v2/address/' + encodeURIComponent(address) + '?details=basic').then(function (data) {
+				if (!data || typeof data.balance === 'undefined') {
+					return deferred().reject('Blockbook: unexpected balance response').promise();
+				}
+				/* Blockbook returns string satoshi; add confirmed + unconfirmed */
+				var confirmed = baseUnits(data.balance || 0);
+				var unconfirmed = baseUnits(data.unconfirmedBalance || 0);
+				return confirmed + unconfirmed;
+			});
+		},
+		tx: function (base, txid) {
+			return getJson(base + '/api/v2/tx/' + encodeURIComponent(txid)).then(function (tx) {
+				var vin = [];
+				var inputs = tx.vin || [];
+				for (var i = 0; i < inputs.length; i++) {
+					vin.push({
+						txid: inputs[i].txid || '',
+						vout: toInt(inputs[i].vout, 0),
+						scriptsig: inputs[i].hex || '',
+						sequence: toInt(inputs[i].sequence, 0xffffffff),
+						prevout: {
+							value: baseUnits(inputs[i].value || 0),
+							scriptpubkey_address: (inputs[i].addresses && inputs[i].addresses[0]) || ''
+						}
+					});
+				}
+				var vout = [];
+				var outputs = tx.vout || [];
+				for (var j = 0; j < outputs.length; j++) {
+					vout.push({
+						n: toInt(outputs[j].n, j),
+						value: baseUnits(outputs[j].value),
+						scriptpubkey: outputs[j].hex || '',
+						scriptpubkey_address: (outputs[j].addresses && outputs[j].addresses[0]) || '',
+						spent_by: outputs[j].spent === true ? (outputs[j].spentTxId || 'unknown') : ''
+					});
+				}
+				var height = toInt(tx.blockHeight, -1);
+				var confirmed = height > 0;
+				return {
+					txid: tx.txid || txid,
+					version: toInt(tx.version, 1),
+					locktime: toInt(tx.lockTime, 0),
+					size: toInt(tx.size, 0),
+					fee: baseUnits(tx.fees || 0),
+					vin: vin,
+					vout: vout,
+					hex: tx.hex || '',
+					confirmations: toInt(tx.confirmations, confirmed ? 1 : 0),
+					status: { confirmed: confirmed, block_height: confirmed ? height : 0 }
+				};
+			});
+		},
+		txHex: function (base, txid) {
+			return blockbookDriver.tx(base, txid).then(function (tx) {
+				if (tx.hex && /^[0-9a-f]+$/i.test(tx.hex)) return tx.hex;
+				return deferred().reject('Blockbook returned no tx hex for ' + txid).promise();
+			});
+		},
+		outspend: function (base, txid, vout) {
+			return blockbookDriver.tx(base, txid).then(function (tx) {
+				var out = tx.vout[toInt(vout, 0)];
+				if (!out) return { spent: false };
+				return out.spent_by ? { spent: true, txid: out.spent_by } : { spent: false };
+			});
+		},
+		tipHeight: function (base) {
+			return getJson(base + '/api/v2').then(function (data) {
+				var height = data && data.blockbook && toInt(data.blockbook.bestHeight, 0);
+				if (height <= 0) return deferred().reject('Invalid Blockbook tip height').promise();
+				return height;
+			});
+		},
+		broadcast: function (base, txhex) {
+			return getText(base + '/api/v2/sendtx/' + encodeURIComponent(txhex)).then(function (body) {
+				/* Blockbook returns the txid as plain text on success, or a JSON
+				   error object on failure. */
+				if (/^[a-fA-F0-9]{64}$/.test(body)) {
+					return { success: true, txid: body, error: '', raw: body };
+				}
+				var message = body || 'Broadcast failed';
+				try {
+					var parsed = JSON.parse(body);
+					if (parsed && parsed.error) message = parsed.error;
+				} catch (e) { /* plain-text error */ }
+				return { success: false, txid: '', error: message, raw: body };
+			});
+		}
+	};
+
 	explorer.drivers = {
 		esplora: esploraDriver,
 		blockcypher: blockcypherDriver,
-		blockchair: blockchairDriver
+		blockchair: blockchairDriver,
+		blockbook: blockbookDriver
 	};
 
 	/* ------------------------------------------------------------------

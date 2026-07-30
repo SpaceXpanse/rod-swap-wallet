@@ -1,13 +1,13 @@
 {
   "name": "harness",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "description": "Independent browser and mock-chain proof harness for the ROD wallet",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node unit-browser-test.js",
+    "test:fast": "FAST_ONLY=1 bash run-all.sh",
+    "test:full": "bash run-all.sh"
   },
-  "keywords": [],
-  "author": "",
   "license": "Apache-2.0",
   "dependencies": {
     "@noble/curves": "^1.9.7",

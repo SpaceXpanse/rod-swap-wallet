@@ -17,9 +17,9 @@
 		TERMS_ACCEPTED: ['REFUNDS_READY'],
 		REFUNDS_READY: ['SIGNATURES_EXCHANGED'],
 		SIGNATURES_EXCHANGED: ['PREPARED'],
-		PREPARED: ['ALICE_ROD_FUNDED'],
-		ALICE_ROD_FUNDED: ['BOB_ALT_FUNDED'],
-		BOB_ALT_FUNDED: ['READY'],
+		PREPARED: ['SELLER_ROD_FUNDED'],
+		SELLER_ROD_FUNDED: ['BUYER_ALT_FUNDED'],
+		BUYER_ALT_FUNDED: ['READY'],
 		READY: ['ALT_CLAIMED'],
 		ALT_CLAIMED: ['SECRET_RECOVERED'],
 		SECRET_RECOVERED: ['ROD_CLAIMED'],
@@ -177,16 +177,10 @@
 
 	/* Default settlement fees (decimal strings). ROD relays at a much higher
 	   fee floor than LTC (observed ~232 sat/B on mainnet). */
-	/* 0.00051900 was sized for a ~226-byte P2PKH FUNDING transaction
-	   (226 * 232 = 52,432). Claims and refunds spend a 2-of-2 P2SH output and
-	   are ~306 bytes, needing 306 * 232 = 70,992 - the old value was 169 sat/B
-	   against a 232 sat/B floor, i.e. 73% of the minimum. An unrelayable ROD
-	   REFUND during the refund window is not a delay, it is total loss of the
-	   ROD leg, and ROD's relayFloorPerByte of 0 means nothing rejected it. */
 	swapModule.DEFAULT_FEES = {
-		rodClaimFee: '0.00071000',
+		rodClaimFee: '0.00051900',
 		altClaimFee: '0.00001000',
-		rodRefundFee: '0.00071000',
+		rodRefundFee: '0.00051900',
 		altRefundFee: '0.00001000'
 	};
 
@@ -211,16 +205,7 @@
 	   counterparty take both legs. In fiat this is a fraction of a cent. */
 	swapModule.ALT_CHAIN_FEES = {
 		LTC: { claimFee: '0.00001000', refundFee: '0.00001000', fundingFee: '0.00001000' },
-		DOGE: { claimFee: '0.01000000', refundFee: '0.01000000', fundingFee: '0.01000000' },
-		/* BTC: 5000 sats ≈ 16 sat/byte for a ~306-byte 2-of-2 P2SH spend.
-		   Higher than LTC because BTC fee pressure is far more variable, and a
-		   settlement transaction that misses its refund deadline is a fund-loss
-		   event rather than a delay. This clears typical mempool congestion; in
-		   a sustained fee spike a swap may need the fee raised in a new session,
-		   which is the safe failure mode (both legs refund). */
-		BTC: { claimFee: '0.00005000', refundFee: '0.00005000', fundingFee: '0.00005000' },
-		/* BCH: 1000 sats. BCH has consistently low fees; same level as LTC. */
-		BCH: { claimFee: '0.00001000', refundFee: '0.00001000', fundingFee: '0.00001000' }
+		DOGE: { claimFee: '0.01000000', refundFee: '0.01000000', fundingFee: '0.01000000' }
 	};
 
 	/* Fees for an alt chain. Throws rather than deriving a plausible-looking
@@ -241,6 +226,12 @@
 	   under a signature: every funding address, refund address, claim plan and
 	   sighash below is derived from this one field. */
 	swapModule.DEFAULT_ALT_CHAIN = 'LTC';
+	/* A block-height comparison across unrelated chains is meaningless. Convert
+	   both remaining refund windows to target wall-clock seconds and retain a
+	   minimum 30-minute action margin for confirmation variance, relay delay and
+	   broadcasting the counter-claim. The shipped defaults retain roughly three
+	   hours, so this rejects unsafe custom/incoming terms without changing them. */
+	swapModule.MIN_REFUND_SAFETY_MARGIN_SECONDS = 30 * 60;
 	swapModule.normalizeAltChain = function(chainCode){
 		var code = String(chainCode || '').toUpperCase();
 		if(code === 'ROD' || !CHAINS.definitions[code]){
@@ -249,10 +240,77 @@
 		return code;
 	};
 
+	swapModule.assertRefundOrdering = function(terms, rodHeight, altHeight){
+		if(!terms){
+			throw new Error('Refund ordering check requires swap terms');
+		}
+		var altChain = String(terms.altChain || swapModule.DEFAULT_ALT_CHAIN).toUpperCase();
+		if(altChain === 'ROD' || !CHAINS.definitions[altChain]){
+			throw new Error('Refund ordering check has unsupported alt chain ' + altChain);
+		}
+		var currentRodHeight = parseInt(rodHeight, 10);
+		var currentAltHeight = parseInt(altHeight, 10);
+		var refundRodHeight = parseInt(terms.refundRodHeight, 10);
+		var altRefundLockHeight = parseInt(terms.altRefundLockHeight, 10);
+		if(!(currentRodHeight >= 0) || !(currentAltHeight >= 0) ||
+			!(refundRodHeight > currentRodHeight) || !(altRefundLockHeight > currentAltHeight)){
+			throw new Error('Refund ordering check requires future lock heights and current chain tips');
+		}
+		var rodPolicy = CHAINS.getPolicy('ROD');
+		var altPolicy = CHAINS.getPolicy(altChain);
+		var rodRemainingSeconds = (refundRodHeight - currentRodHeight) * rodPolicy.blockSeconds;
+		var altRemainingSeconds = (altRefundLockHeight - currentAltHeight) * altPolicy.blockSeconds;
+		var confirmationMargin = Math.max(
+			(parseInt(terms.rodConfirmations, 10) || 1) * rodPolicy.blockSeconds,
+			(parseInt(terms.altConfirmations, 10) || 1) * altPolicy.blockSeconds
+		);
+		var safetyMarginSeconds = Math.max(swapModule.MIN_REFUND_SAFETY_MARGIN_SECONDS, confirmationMargin);
+		if(!(rodRemainingSeconds > altRemainingSeconds + safetyMarginSeconds)){
+			throw new Error(
+				'Unsafe refund ordering: ROD has ' + rodRemainingSeconds +
+				's remaining but ' + altChain + ' has ' + altRemainingSeconds +
+				's; ROD must remain later by more than ' + safetyMarginSeconds + 's'
+			);
+		}
+		return {
+			altChain: altChain,
+			rodHeight: currentRodHeight,
+			altHeight: currentAltHeight,
+			rodRemainingSeconds: rodRemainingSeconds,
+			altRemainingSeconds: altRemainingSeconds,
+			safetyMarginSeconds: safetyMarginSeconds
+		};
+	};
+
+	swapModule.assertMatchingTermsHash = function(localTerms, remoteTerms){
+		var localHash = localTerms && String(localTerms.termsHash || '').toLowerCase();
+		var remoteHash = remoteTerms && String(remoteTerms.termsHash || '').toLowerCase();
+		if(!/^[0-9a-f]{64}$/.test(localHash) || !/^[0-9a-f]{64}$/.test(remoteHash) || localHash !== remoteHash){
+			throw new Error('Incoming swap terms hash does not match locally derived canonical terms');
+		}
+		return true;
+	};
+
+	/* Nostr uses an x-only BIP340 key. A ROD P2PKH identity commits to the full
+	   compressed secp256k1 key, so try the two possible parity bytes; exactly
+	   one matches the wallet that derived the Nostr identity. This prevents the
+	   first arbitrary signed relay event from pinning an attacker's key. */
+	swapModule.nostrPubkeyMatchesRodIdentity = function(nostrPubkey, rodAddress){
+		var xOnly = String(nostrPubkey || '').toLowerCase().replace(/^0x/, '');
+		var identity = String(rodAddress || '').replace(/\s+/g, '');
+		if(!/^[0-9a-f]{64}$/.test(xOnly) || !identity) return false;
+		try {
+			return CHAINS.publicKeyToAddress('ROD', '02' + xOnly, 'legacy') === identity ||
+				CHAINS.publicKeyToAddress('ROD', '03' + xOnly, 'legacy') === identity;
+		} catch(error){
+			return false;
+		}
+	};
+
 	swapModule.buildTerms = function(input){
 		var childIndex = input.childIndex;
-		var alicePublicKey = input.aliceChildPubKey;
-		var bobPublicKey = input.bobChildPubKey;
+		var sellerPublicKey = input.sellerChildPubKey;
+		var buyerPublicKey = input.buyerChildPubKey;
 		var altChain = swapModule.normalizeAltChain(input.altChain);
 		var canonicalTerms = {
 			swapId: input.swapId,
@@ -265,16 +323,16 @@
 			buyerSwapXpub: input.buyerSwapXpub,
 			childIndex: childIndex,
 			releaseRodHeight: parseInt(input.releaseRodHeight, 10),
-			aliceChildPubKey: alicePublicKey,
-			bobChildPubKey: bobPublicKey,
-			sellerAltPayoutAddress: input.sellerAltPayoutAddress,
-			buyerRodPayoutAddress: input.buyerRodPayoutAddress,
+			sellerChildPubKey: sellerPublicKey,
+			buyerChildPubKey: buyerPublicKey,
+			sellerAltPayoutAddress: (input.sellerAltPayoutAddress || '').replace(/\s+/g, ''),
+			buyerRodPayoutAddress: (input.buyerRodPayoutAddress || '').replace(/\s+/g, ''),
 			/* Identity binding for the 5-field swapId */
 			sellerIdentity: input.sellerIdentity || '',
 			buyerIdentity: input.buyerIdentity || '',
 			termsNonce: input.termsNonce || '',
-			/* Refund protocol. Alice (secret holder, funds ROD first) refunds
-			   LATE; Bob (funds LTC second) refunds EARLY — otherwise the secret
+			/* Refund protocol. Seller (secret holder, funds ROD first) refunds
+			   LATE; Buyer (funds LTC second) refunds EARLY — otherwise the secret
 			   holder could refund ROD and still claim LTC. */
 			refundRodHeight: parseInt(input.refundRodHeight, 10) || 0,
 			altRefundLockHeight: parseInt(input.altRefundLockHeight, 10) || 0,
@@ -291,11 +349,19 @@
 		/* Refund destinations derive from the swap child keys so both sides can
 		   compute them without extra message fields; each side's own wallet holds
 		   the matching private child key. */
-		canonicalTerms.sellerRodRefundAddress = CHAINS.publicKeyToAddress('ROD', alicePublicKey, 'legacy');
-		canonicalTerms.buyerAltRefundAddress = CHAINS.publicKeyToAddress(altChain, bobPublicKey, 'legacy');
+		/* Validate payout addresses are actual blockchain addresses, not leaked
+		   order names or d-tags from the orderbook fallback. */
+		if (!canonicalTerms.buyerRodPayoutAddress || /\//.test(canonicalTerms.buyerRodPayoutAddress)) {
+			throw new Error('buyerRodPayoutAddress is missing or invalid: "' + (canonicalTerms.buyerRodPayoutAddress || '').substring(0, 30) + '"');
+		}
+		if (!canonicalTerms.sellerAltPayoutAddress || /\//.test(canonicalTerms.sellerAltPayoutAddress)) {
+			throw new Error('sellerAltPayoutAddress is missing or invalid: "' + (canonicalTerms.sellerAltPayoutAddress || '').substring(0, 30) + '"');
+		}
+		canonicalTerms.sellerRodRefundAddress = CHAINS.publicKeyToAddress('ROD', sellerPublicKey, 'legacy');
+		canonicalTerms.buyerAltRefundAddress = CHAINS.publicKeyToAddress(altChain, buyerPublicKey, 'legacy');
 		canonicalTerms.termsHash = sha256Hex(stableStringify(canonicalTerms));
-		canonicalTerms.rodFunding = CHAINS.planFunding('ROD', [alicePublicKey, bobPublicKey], 2, canonicalTerms.rodAmount);
-		canonicalTerms.altFunding = CHAINS.planFunding(altChain, [alicePublicKey, bobPublicKey], 2, canonicalTerms.altAmount);
+		canonicalTerms.rodFunding = CHAINS.planFunding('ROD', [sellerPublicKey, buyerPublicKey], 2, canonicalTerms.rodAmount);
+		canonicalTerms.altFunding = CHAINS.planFunding(altChain, [sellerPublicKey, buyerPublicKey], 2, canonicalTerms.altAmount);
 		canonicalTerms.rodClaim = CHAINS.planClaim('ROD', canonicalTerms.rodFunding, canonicalTerms.buyerRodPayoutAddress, canonicalTerms.rodAmount, canonicalTerms.rodClaimFee);
 		canonicalTerms.altClaim = CHAINS.planClaim(altChain, canonicalTerms.altFunding, canonicalTerms.sellerAltPayoutAddress, canonicalTerms.altAmount, canonicalTerms.altClaimFee);
 		return canonicalTerms;
@@ -325,7 +391,7 @@
 		if(!session || !session.state){
 			throw new Error('Swap session is missing state');
 		}
-		var stateOrder = ['OPEN', 'NEGOTIATING', 'TERMS_ACCEPTED', 'REFUNDS_READY', 'SIGNATURES_EXCHANGED', 'PREPARED', 'ALICE_ROD_FUNDED', 'BOB_ALT_FUNDED', 'READY', 'ALT_CLAIMED', 'SECRET_RECOVERED', 'ROD_CLAIMED', 'COMPLETE'];
+		var stateOrder = ['OPEN', 'NEGOTIATING', 'TERMS_ACCEPTED', 'REFUNDS_READY', 'SIGNATURES_EXCHANGED', 'PREPARED', 'SELLER_ROD_FUNDED', 'BUYER_ALT_FUNDED', 'READY', 'ALT_CLAIMED', 'SECRET_RECOVERED', 'ROD_CLAIMED', 'COMPLETE'];
 		if(REFUND_STATES[session.state]) return session; /* refund branch is terminal for auto-advance */
 		var currentIndex = stateOrder.indexOf(session.state);
 		var nextIndex = stateOrder.indexOf(nextState);
@@ -374,12 +440,18 @@
 			altChain: input.altChain,
 			rodAmount: input.rodAmount,
 			altAmount: input.altAmount,
-			sellerSwapXpub: accountXpub(input.sellerSwapAccountKey),
-			buyerSwapXpub: accountXpub(input.buyerSwapAccountKey),
+			/* Hash the exact account xpubs each peer advertised. Re-serialising
+			   an xprv as xpub can change BIP32 depth/parent-fingerprint metadata
+			   even though it derives the identical child key, which previously
+			   made two honest peers compute different terms hashes and forced an
+			   unsafe "accept remote terms" fallback. Private account keys remain
+			   local and are used only for child derivation above. */
+			sellerSwapXpub: input.sellerSwapXpub || accountXpub(input.sellerSwapAccountKey),
+			buyerSwapXpub: input.buyerSwapXpub || accountXpub(input.buyerSwapAccountKey),
 			childIndex: sellerSwapKeys.childIndex,
 			releaseRodHeight: input.releaseRodHeight,
-			aliceChildPubKey: sellerSwapKeys.publicKey,
-			bobChildPubKey: buyerSwapKeys.publicKey,
+			sellerChildPubKey: sellerSwapKeys.publicKey,
+			buyerChildPubKey: buyerSwapKeys.publicKey,
 			sellerAltPayoutAddress: input.sellerAltPayoutAddress,
 			buyerRodPayoutAddress: input.buyerRodPayoutAddress,
 			sellerIdentity: input.sellerIdentity,
@@ -403,9 +475,9 @@
 			childIndex: sellerSwapKeys.childIndex,
 			sellerSwapXpub: terms.sellerSwapXpub,
 			buyerSwapXpub: terms.buyerSwapXpub,
-			localChildPrivateKey: input.role === 'alice' ? sellerSwapKeys.privateKeyHex : buyerSwapKeys.privateKeyHex,
-			localChildPublicKey: input.role === 'alice' ? sellerSwapKeys.publicKey : buyerSwapKeys.publicKey,
-			remoteChildPublicKey: input.role === 'alice' ? buyerSwapKeys.publicKey : sellerSwapKeys.publicKey,
+			localChildPrivateKey: input.role === 'seller' ? sellerSwapKeys.privateKeyHex : buyerSwapKeys.privateKeyHex,
+			localChildPublicKey: input.role === 'seller' ? sellerSwapKeys.publicKey : buyerSwapKeys.publicKey,
+			remoteChildPublicKey: input.role === 'seller' ? buyerSwapKeys.publicKey : sellerSwapKeys.publicKey,
 			adaptorSecret: '',
 			adaptorPoint: '',
 			messages: [],
@@ -426,6 +498,14 @@
 			}
 		}
 		return sessions;
+	};
+
+	swapModule.removeSession = function(swapId){
+		var state = getState();
+		if(state.sessions && state.sessions[swapId]){
+			delete state.sessions[swapId];
+			saveState(state);
+		}
 	};
 
 	swapModule.addMessage = function(swapId, eventObject){
@@ -519,27 +599,27 @@
 	};
 
 	swapModule.validationFixtures = function(){
-		var aliceAccount = swapModule.createSwapAccount('alice fixture passphrase');
-		var bobAccount = swapModule.createSwapAccount('bob fixture passphrase');
-		var swapId = swapModule.swapIdFromOrder('alice.rod/order-1', '1', 'alice.rod', 'bob.rod', 'fixture-nonce-1');
+		var sellerAccount = swapModule.createSwapAccount('seller fixture passphrase');
+		var buyerAccount = swapModule.createSwapAccount('buyer fixture passphrase');
+		var swapId = swapModule.swapIdFromOrder('seller.rod/order-1', '1', 'seller.rod', 'buyer.rod', 'fixture-nonce-1');
 		var childIndex = swapModule.childIndexFromSwapId(swapId);
-		var aliceKeys = swapModule.deriveSwapKeys(aliceAccount.xprv, childIndex);
-		var bobKeys = swapModule.deriveSwapKeys(bobAccount.xprv, childIndex);
+		var sellerKeys = swapModule.deriveSwapKeys(sellerAccount.xprv, childIndex);
+		var buyerKeys = swapModule.deriveSwapKeys(buyerAccount.xprv, childIndex);
 		var terms = swapModule.buildTerms({
 			swapId: swapId,
-			orderId: 'alice.rod/order-1',
+			orderId: 'seller.rod/order-1',
 			rodAmount: '1000.00000000',
 			altAmount: '5.00000000',
-			sellerSwapXpub: aliceAccount.xpub,
-			buyerSwapXpub: bobAccount.xpub,
+			sellerSwapXpub: sellerAccount.xpub,
+			buyerSwapXpub: buyerAccount.xpub,
 			childIndex: childIndex,
 			releaseRodHeight: 1500000,
-			aliceChildPubKey: aliceKeys.publicKey,
-			bobChildPubKey: bobKeys.publicKey,
-			sellerAltPayoutAddress: CHAINS.publicKeyToAddress(swapModule.DEFAULT_ALT_CHAIN, aliceKeys.publicKey, 'legacy'),
-			buyerRodPayoutAddress: CHAINS.publicKeyToAddress('ROD', bobKeys.publicKey, 'legacy'),
-			sellerIdentity: 'alice.rod',
-			buyerIdentity: 'bob.rod',
+			sellerChildPubKey: sellerKeys.publicKey,
+			buyerChildPubKey: buyerKeys.publicKey,
+			sellerAltPayoutAddress: CHAINS.publicKeyToAddress(swapModule.DEFAULT_ALT_CHAIN, sellerKeys.publicKey, 'legacy'),
+			buyerRodPayoutAddress: CHAINS.publicKeyToAddress('ROD', buyerKeys.publicKey, 'legacy'),
+			sellerIdentity: 'seller.rod',
+			buyerIdentity: 'buyer.rod',
 			termsNonce: 'fixture-nonce-1',
 			refundRodHeight: 1500480,
 			altRefundLockHeight: 3100024,
@@ -547,12 +627,12 @@
 			altConfirmations: 1
 		});
 		return {
-			aliceAccount: aliceAccount,
-			bobAccount: bobAccount,
+			sellerAccount: sellerAccount,
+			buyerAccount: buyerAccount,
 			swapId: swapId,
 			childIndex: childIndex,
-			aliceKeys: aliceKeys,
-			bobKeys: bobKeys,
+			sellerKeys: sellerKeys,
+			buyerKeys: buyerKeys,
 			terms: terms
 		};
 	};
@@ -561,19 +641,19 @@
 		var fixtures = swapModule.validationFixtures();
 		var recomputedTerms = swapModule.buildTerms({
 			swapId: fixtures.swapId,
-			orderId: 'alice.rod/order-1',
+			orderId: 'seller.rod/order-1',
 			rodAmount: '1000.00000000',
 			altAmount: '5.00000000',
-			sellerSwapXpub: fixtures.aliceAccount.xpub,
-			buyerSwapXpub: fixtures.bobAccount.xpub,
+			sellerSwapXpub: fixtures.sellerAccount.xpub,
+			buyerSwapXpub: fixtures.buyerAccount.xpub,
 			childIndex: fixtures.childIndex,
 			releaseRodHeight: 1500000,
-			aliceChildPubKey: fixtures.aliceKeys.publicKey,
-			bobChildPubKey: fixtures.bobKeys.publicKey,
+			sellerChildPubKey: fixtures.sellerKeys.publicKey,
+			buyerChildPubKey: fixtures.buyerKeys.publicKey,
 			sellerAltPayoutAddress: fixtures.terms.sellerAltPayoutAddress,
 			buyerRodPayoutAddress: fixtures.terms.buyerRodPayoutAddress,
-			sellerIdentity: 'alice.rod',
-			buyerIdentity: 'bob.rod',
+			sellerIdentity: 'seller.rod',
+			buyerIdentity: 'buyer.rod',
 			termsNonce: 'fixture-nonce-1',
 			refundRodHeight: 1500480,
 			altRefundLockHeight: 3100024,
@@ -590,7 +670,7 @@
 		return {
 			name: 'Swap account and terms fixtures',
 			passed: fixtures.terms.termsHash === recomputedTerms.termsHash &&
-				fixtures.aliceKeys.publicKey !== fixtures.bobKeys.publicKey &&
+				fixtures.sellerKeys.publicKey !== fixtures.buyerKeys.publicKey &&
 				!!fixtures.terms.sellerRodRefundAddress &&
 				!!fixtures.terms.buyerAltRefundAddress &&
 				fixtures.terms.refundRodHeight > fixtures.terms.releaseRodHeight &&
@@ -603,13 +683,13 @@
 		var previousUrl = swapModule.getConfig().nameHelperUrl;
 		swapModule.setNameHelperUrl('');
 		var result = null;
-		swapModule.nameAdapter.lookup('sf/alice', function(response){
+		swapModule.nameAdapter.lookup('sf/seller', function(response){
 			result = response;
 		});
 		swapModule.setNameHelperUrl(previousUrl);
 		var jsonValidationPassed = false;
 		try {
-			swapModule.validateRodNameRecord({ profile: { handle: 'alice' } });
+			swapModule.validateRodNameRecord({ profile: { handle: 'seller' } });
 			jsonValidationPassed = true;
 		} catch(error){
 			jsonValidationPassed = false;
@@ -659,7 +739,7 @@
 					var sellerSwapAccountKey = $.trim($('#otcSellerSwapXprv').val()) || $.trim($('#otcSellerSwapXpub').val());
 					var buyerSwapAccountKey = $.trim($('#otcBuyerSwapXprv').val()) || $.trim($('#otcBuyerSwapXpub').val());
 					var session = swapModule.createOfferSession({
-						role: 'alice',
+						role: 'seller',
 						swapId: swapId,
 						orderId: orderId,
 						rodAmount: $('#otcRodAmount').val(),

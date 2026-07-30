@@ -4,7 +4,7 @@
  * Fork-specific service worker for the SpaceXpanse ROD wallet.
  */
 
-const STATIC_CACHE_VERSION = "rod-wallet-static-v2.8.0-alpha.0";
+const STATIC_CACHE_VERSION = "rod-wallet-static-v2.9.0-beta.1";
 /* NOTE: cache.addAll() rejects the whole install if ANY entry 404s.
    The previous list referenced ./otc-test.html (removed from the repo),
    so the service worker never installed. It also omitted the OTC engine
@@ -47,7 +47,14 @@ const STATIC_ASSET_URLS = [
   "./images/icon-512.png",
   "./images/icon-512-maskable.png",
   "./images/coinbin.png",
-  "./images/about.png"
+  "./images/about.png",
+  "./images/loader.gif",
+  "./images/background.jpg",
+  "./fonts/glyphicons-halflings-regular.eot",
+  "./fonts/glyphicons-halflings-regular.svg",
+  "./fonts/glyphicons-halflings-regular.ttf",
+  "./fonts/glyphicons-halflings-regular.woff",
+  "./fonts/glyphicons-halflings-regular.woff2"
 ];
 
 self.addEventListener("install", (installEvent) => {

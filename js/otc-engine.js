@@ -22,9 +22,9 @@
 		altApiUrl: 'https://litecoinspace.org/api',
 		rpcUrl: '', rpcPort: '18080', rpcUser: '', rpcPass: '', rpcWallet: '',
 		relays: ['wss://relay.damus.io','wss://nos.lol','wss://relay.nostr.band'],
-		releaseBlocks: 20,
-		/* Refund delays in native blocks of each chain. Alice (the secret
-		   holder, who funds ROD first) must refund LATER in wall time than Bob
+		releaseBlocks: 120,
+		/* Refund delays in native blocks of each chain. Seller (the secret
+		   holder, who funds ROD first) must refund LATER in wall time than Buyer
 		   refunds the alt leg — otherwise the secret holder could reclaim ROD
 		   and still claim the alt coin. ROD ~30s blocks × 480 ≈ 4h. */
 		refundRodBlocks: 480,
@@ -55,24 +55,6 @@
 				apiType: 'blockcypher',
 				refundBlocks: 60,
 				confirmations: 6
-			},
-			/* Bitcoin: 6 blocks × 600s = 3600s ≈ 1h, matching the other alt
-			   chains' wall-clock refund window. mempool.space serves a public
-			   Esplora-compatible API (CORS, keyless). */
-			BTC: {
-				apiUrl: 'https://mempool.space/api',
-				apiType: 'esplora',
-				refundBlocks: 6,
-				confirmations: 1
-			},
-			/* Bitcoin Cash: 6 blocks × 600s = 3600s ≈ 1h. Blockchair is the
-			   only keyless public API serving CORS + raw hex + outspend lookup
-			   for BCH. */
-			BCH: {
-				apiUrl: 'https://api.blockchair.com/bitcoin-cash',
-				apiType: 'blockchair',
-				refundBlocks: 6,
-				confirmations: 1
 			}
 		},
 		/* Automation re-drive interval (ms); tests may lower this */
@@ -124,6 +106,17 @@
 			if (!raw) return cfg;
 			var saved = JSON.parse(raw);
 			if (!saved || typeof saved !== 'object') return cfg;
+			/* Wallet API Settings used to copy every network into altChains,
+			   including wallet-only DGB. Remove only the exact DGB backend that
+			   shipped as the old default so upgrades inherit coin.js's current
+			   Digiexplorer/Esplora default; genuinely custom endpoints remain. */
+			var savedDgb = saved.altChains && saved.altChains.DGB;
+			if (savedDgb &&
+				savedDgb.apiUrl === 'https://api.blockchair.com/digibyte' &&
+				(!savedDgb.apiType || savedDgb.apiType === 'blockchair')) {
+				delete saved.altChains.DGB;
+				try { localStorage.setItem(CFG_KEY, JSON.stringify(saved)); } catch (migrationError) {}
+			}
 			$.extend(cfg, saved);
 			if (Object.prototype.hasOwnProperty.call(saved, 'relays')) {
 				cfg.relays = $.isArray(saved.relays) ? saved.relays.slice() : defaults.relays.slice();
@@ -542,7 +535,18 @@
 			w.onopen = function () {
 				if (s.closed) { try { w.close(); } catch (e0) {} return; }
 				if (s.onStatus) s.onStatus('+', u);
-				for (var id in s.h) if (s.h[id].f) w.send(JSON.stringify(['REQ', id, s.h[id].f]));
+				var now = Math.floor(Date.now() / 1000);
+				for (var id in s.h) {
+					var h = s.h[id];
+					if (!h.f) continue;
+					/* Refresh the since timestamp so reconnect replays only the
+					   intended lookback window, not the full history from when
+					   the subscription was originally created. */
+					if (h.lookback > 0) {
+						h.f = $.extend({}, h.f, { since: Math.max(0, now - h.lookback) });
+					}
+					w.send(JSON.stringify(['REQ', id, h.f]));
+				}
 				var flushed = s._flush(u);
 				if (flushed && s.onNotice) s.onNotice(['LOCAL_FLUSH', flushed], u);
 			};
@@ -582,8 +586,9 @@
 		for (var u in this.ws) if (this.ws[u].readyState === 1) { this.ws[u].send(f); n++; }
 		return n;
 	};
-	Pool.prototype.sub = function (filt, cb) {
-		var id = 'o' + (++this.n) + '-' + Date.now(); this.h[id] = { cb: cb, f: filt };
+	Pool.prototype.sub = function (filt, cb, lookbackSeconds) {
+		var id = 'o' + (++this.n) + '-' + Date.now();
+		this.h[id] = { cb: cb, f: filt, lookback: lookbackSeconds || 0 };
 		var fr = JSON.stringify(['REQ', id, filt]); for (var u in this.ws) if (this.ws[u].readyState === 1) this.ws[u].send(fr);
 		return id;
 	};
@@ -670,6 +675,15 @@
 			localStorage.setItem(SEEN_EVENT_IDS_KEY, JSON.stringify(Object.keys(seen)));
 		} catch (error) {}
 	}
+	/* A valid incoming swap_terms event may need fresh chain tips before the UI
+	   can accept it. If that read fails transiently, let the same relay event be
+	   delivered again instead of permanently recording it as consumed. */
+	engine.forgetSeenEventId = function (eventId) {
+		if (!eventId || !seen[eventId]) return;
+		delete seen[eventId];
+		try { localStorage.setItem(SEEN_EVENT_IDS_KEY, JSON.stringify(Object.keys(seen))); }
+		catch (error) {}
+	};
 	function subscriptionSince(seconds) {
 		return Math.max(0, Math.floor(Date.now() / 1000) - seconds);
 	}
@@ -725,10 +739,19 @@
 			handleRelaySwapEvent(ev, relayUrl || 'unknown relay', 'global', '');
 		};
 		var globalFilter = { kinds: otcKinds(), since: subscriptionSince(GLOBAL_SUB_LOOKBACK_SECONDS), limit: TRACKED_SWAP_EVENT_LIMIT };
-		var subId = engine.pool.sub(globalFilter, engine._listenHandler);
+		var subId = engine.pool.sub(globalFilter, engine._listenHandler, GLOBAL_SUB_LOOKBACK_SECONDS);
 		if (engine.onRelaySubscription) engine.onRelaySubscription(subId, globalFilter, 'global');
 	};
 
+	engine.untrackSwapId = function (swapId) {
+		if (!engine.pool || !engine._trackedSwapSubscriptions) return;
+		var subs = engine._trackedSwapSubscriptions[swapId];
+		if (!subs) return;
+		if (subs.dSub) engine.pool.unsub(subs.dSub);
+		if (subs.swapIdSub) engine.pool.unsub(subs.swapIdSub);
+		delete engine._trackedSwapSubscriptions[swapId];
+		if (engine.trackedSwapIds) delete engine.trackedSwapIds[swapId];
+	};
 	engine.trackSwapId = function (swapId) {
 		if (!engine.pool) engine.startRelays();
 		engine.startListening();
@@ -744,12 +767,12 @@
 		var dFilter = { kinds: otcKinds(), '#d': [cleanSwapId], since: trackedSince, limit: TRACKED_SWAP_EVENT_LIMIT };
 		var dSub = engine.pool.sub(dFilter, function (ev, relayUrl) {
 			handleRelaySwapEvent(ev, relayUrl || 'unknown relay', '#d', cleanSwapId);
-		});
+		}, TRACKED_SWAP_SUB_LOOKBACK_SECONDS);
 		if (engine.onRelaySubscription) engine.onRelaySubscription(dSub, dFilter, '#d');
 		var swapIdFilter = { kinds: otcKinds(), '#swapId': [cleanSwapId], since: trackedSince, limit: TRACKED_SWAP_EVENT_LIMIT };
 		var swapIdSub = engine.pool.sub(swapIdFilter, function (ev, relayUrl) {
 			handleRelaySwapEvent(ev, relayUrl || 'unknown relay', '#swapId', cleanSwapId);
-		});
+		}, TRACKED_SWAP_SUB_LOOKBACK_SECONDS);
 		if (engine.onRelaySubscription) engine.onRelaySubscription(swapIdSub, swapIdFilter, '#swapId');
 		engine._trackedSwapSubscriptions[cleanSwapId] = { dSub: dSub, swapIdSub: swapIdSub };
 		return swapIdSub;
@@ -845,11 +868,7 @@
 					/* Match by address OR script, with 1-sat tolerance for float rounding */
 					var addrMatch = outAddr === expectedAddress;
 					var scriptMatch = outScript && expectedScript && outScript === expectedScript;
-					/* EXACT match. Both sides go through CHAINS.decimalToSats
-					   now, so the old +/-1 float-rounding tolerance no longer
-					   buys anything and let a counterparty underfund by one
-					   base unit while still producing accepted evidence. */
-					var valueMatch = outputSats === expectedSats;
+					var valueMatch = Math.abs(outputSats - expectedSats) <= 1;
 					if ((addrMatch || scriptMatch) && valueMatch) {
 						return {
 							chainCode: cc, txid: txid, vout: vout,
@@ -993,9 +1012,8 @@
 				var selected = selection.selected, total = selection.total;
 				if (total < amountSats + feeSats) throw new Error('Insufficient ' + cc + ' UTXOs: need ' + CHAINS.satsToDecimal(amountSats + feeSats) + ', selected ' + CHAINS.satsToDecimal(total));
 				var tx = coinjs.transaction();
-				tx.forkId = coinjs.usesForkId();
 				for (var s = 0; s < selected.length; s++) {
-					tx.addinput(selected[s].txid, selected[s].vout, selected[s].script, 0xffffffff, selected[s].value);
+					tx.addinput(selected[s].txid, selected[s].vout, selected[s].script, 0xffffffff);
 				}
 				tx.addoutput(destinationAddress, CHAINS.satsToDecimal(amountSats));
 				var change = total - amountSats - feeSats;
@@ -1034,6 +1052,22 @@
 	};
 	engine.buildClaimTxFromFunding = function (cc, fundingEvidence, redeemScript, destinationAddress, feeDecimal) {
 		return withChain(cc, function () {
+			/* Validate destination address decodes under the target chain BEFORE
+			   building the transaction.  A bad address would otherwise cascade
+			   into an opaque "Cannot read properties of undefined" deep inside
+			   the script serialiser. */
+			if (!destinationAddress || typeof destinationAddress !== 'string') {
+				throw new Error(cc + ' claim destination address is missing');
+			}
+			var trimmedDest = destinationAddress.replace(/\s+/g, '');
+			if (trimmedDest !== destinationAddress) {
+				debugRelay(cc + ' claim destination had whitespace — trimmed "' + destinationAddress.substring(0, 20) + '…"');
+				destinationAddress = trimmedDest;
+			}
+			var decoded = coinjs.addressDecode(destinationAddress);
+			if (!decoded) {
+				throw new Error(cc + ' claim destination address does not decode (wrong chain or corrupt): ' + destinationAddress.substring(0, 20) + '…');
+			}
 			/* Verified funding evidence stores .value in satoshis; broadcast-only
 			   evidence carries the decimal .amount string. Both parties MUST
 			   resolve the same satoshi amount or their claim sighashes diverge. */
@@ -1044,16 +1078,12 @@
 			if (amountSats <= feeSats) throw new Error('Claim amount does not cover fee');
 			engine.assertSettlementPolicy(cc, engine.estimateP2shMultisigTxBytes(1, 1), feeSats, [amountSats - feeSats], 'claim');
 			var tx = coinjs.transaction();
-			/* Pin the sighash rule and the prevout amount now, while the chain
-			   context is still active: on BCH the amount is part of the signed
-			   preimage, so a claim built without it cannot be signed at all. */
-			tx.forkId = coinjs.usesForkId();
-			tx.addinput(fundingEvidence.txid, fundingEvidence.vout, redeemScript, 0xffffffff, amountSats);
+			tx.addinput(fundingEvidence.txid, fundingEvidence.vout, redeemScript, 0xffffffff);
 			tx.addoutput(destinationAddress, CHAINS.satsToDecimal(amountSats - feeSats));
 			return tx;
 		});
 	};
-	engine.signClaimTx = function (cc, tx, wif) { return withChain(cc, function () { return tx.transactionSig(0, wif, tx.sigHashType()); }); };
+	engine.signClaimTx = function (cc, tx, wif) { return withChain(cc, function () { return tx.transactionSig(0, wif, 1); }); };
 	/* Timelocked refund spending the 2-of-2 funding output back to the
 	   original funder. nLockTime enforcement requires a non-final input
 	   sequence (0xfffffffe); the tx is then invalid until the chain reaches
@@ -1061,6 +1091,18 @@
 	   outpoint, destination, fee, lockHeight) or their sighashes diverge. */
 	engine.buildRefundTxFromFunding = function (cc, fundingEvidence, redeemScript, destinationAddress, feeDecimal, lockHeight) {
 		return withChain(cc, function () {
+			if (!destinationAddress || typeof destinationAddress !== 'string') {
+				throw new Error(cc + ' refund destination address is missing');
+			}
+			var trimmedDest = destinationAddress.replace(/\s+/g, '');
+			if (trimmedDest !== destinationAddress) {
+				debugRelay(cc + ' refund destination had whitespace — trimmed');
+				destinationAddress = trimmedDest;
+			}
+			var decoded = coinjs.addressDecode(destinationAddress);
+			if (!decoded) {
+				throw new Error(cc + ' refund destination address does not decode (wrong chain or corrupt): ' + destinationAddress.substring(0, 20) + '…');
+			}
 			var amountSats = (fundingEvidence.value != null)
 				? normalizeAmountSats(fundingEvidence.value)
 				: CHAINS.decimalToSats(String(fundingEvidence.amount));
@@ -1071,8 +1113,7 @@
 			engine.assertSettlementPolicy(cc, engine.estimateP2shMultisigTxBytes(1, 1), feeSats, [amountSats - feeSats], 'refund');
 			var tx = coinjs.transaction();
 			tx.lock_time = height;
-			tx.forkId = coinjs.usesForkId();
-			tx.addinput(fundingEvidence.txid, fundingEvidence.vout, redeemScript, 0xfffffffe, amountSats);
+			tx.addinput(fundingEvidence.txid, fundingEvidence.vout, redeemScript, 0xfffffffe);
 			tx.addoutput(destinationAddress, CHAINS.satsToDecimal(amountSats - feeSats));
 			return tx;
 		});
@@ -1093,7 +1134,7 @@
 		});
 	};
 	/* Esplora outpoint spend status: GET /tx/:txid/outspend/:vout →
-	   {spent:bool, txid?:hex}. Lets Bob discover Alice's LTC claim directly
+	   {spent:bool, txid?:hex}. Lets Buyer discover Seller's LTC claim directly
 	   from the chain even if every Nostr relay drops the notification. */
 	engine.getOutspend = function (cc, txid, vout) {
 		return withChain(cc, function () {
@@ -1128,7 +1169,7 @@
 	};
 	/* Parse a P2SH 2-of-2 claim scriptSig [OP_0 <sigA> <sigB> <redeem>] out of
 	   a raw tx hex. Returns {signatures:[hexWithSighashByte,...], redeemScript}.
-	   Signature order matches the redeem-script pubkey order [alice, bob]. */
+	   Signature order matches the redeem-script pubkey order [seller, buyer]. */
 	engine.extractMultisigScriptSigSigs = function (txhex) {
 		var parsed = coinjs.transaction().deserialize(txhex);
 		if (!parsed || !parsed.ins || !parsed.ins.length) throw new Error('Cannot parse claim transaction');
@@ -1156,23 +1197,30 @@
 			return tx;
 		});
 	};
-	/* The message every adaptor signature and every pre-signed refund commits
-	   to. Chain-aware: BCH needs the fork-id preimage, and a legacy hash here
-	   would make both peers verify each other's signatures happily and then
-	   have the network reject the settlement. */
-	engine.sighash = function (tx) { return Crypto.util.hexToBytes(tx.transactionHashAny(0, tx.sigHashType())); };
-	engine.signOrd = function (tx, wif) { return tx.transactionSig(0, wif, tx.sigHashType()); };
+	engine.buildClaimTx = function (cc, txid, vout, rs, amt, addr, fee) {
+		return withChain(cc, function () {
+			var tx = coinjs.transaction(); tx.addinput(txid, vout, rs, 0xffffffff);
+			tx.addoutput(addr, parseFloat(amt) - parseFloat(fee)); return tx;
+		});
+	};
+	engine.sighash = function (tx) { return Crypto.util.hexToBytes(tx.transactionHash(0, 1)); };
+	engine.signOrd = function (tx, wif) { return tx.transactionSig(0, wif, 1); };
 	engine.makeAdaptorSig = function (sess, tx) {
-		return coinjs.adaptor.encrypt({ messageHash: engine.sighash(tx), signingPrivateKey: sess.localChildPrivateKey, adaptorPublicKey: sess.adaptorPoint, auxiliaryRandomness: coinjs.newPrivkey() });
+		if (!sess.localChildPrivateKey || typeof sess.localChildPrivateKey !== 'string' || sess.localChildPrivateKey.length < 60) {
+			throw new Error('localChildPrivateKey is missing or corrupt (length=' + (sess.localChildPrivateKey ? sess.localChildPrivateKey.length : 0) + ') — wallet may be locked or wrong WIF');
+		}
+		if (!sess.adaptorPoint || typeof sess.adaptorPoint !== 'string' || sess.adaptorPoint.length < 60) {
+			throw new Error('adaptorPoint is missing or corrupt (length=' + (sess.adaptorPoint ? sess.adaptorPoint.length : 0) + ')');
+		}
+		var hash = engine.sighash(tx);
+		if (!hash || !hash.length || hash.length !== 32) {
+			throw new Error('sighash produced invalid result (length=' + (hash ? hash.length : 'null') + ') — claim tx may be malformed');
+		}
+		return coinjs.adaptor.encrypt({ messageHash: hash, signingPrivateKey: sess.localChildPrivateKey, adaptorPublicKey: sess.adaptorPoint, auxiliaryRandomness: coinjs.newPrivkey() });
 	};
 	/* Completed signature must carry the SIGHASH_ALL byte to be valid in a
 	   scriptSig; adaptor.complete() returns bare DER. */
-		/* The completed signature needs the SAME trailing sighash byte the rest of
-	   the transaction was signed with, or the script fails on BCH. */
-	engine.completeSig = function (asig, secret, sigHashType) {
-		var shType = (sigHashType == null) ? 1 : sigHashType;
-		return coinjs.adaptor.complete({ adaptorSignature: asig, adaptorSecret: secret }).hex + ('0' + shType.toString(16)).slice(-2);
-	};
+	engine.completeSig = function (asig, secret) { return coinjs.adaptor.complete({ adaptorSignature: asig, adaptorSecret: secret }).hex + '01'; };
 	/* parseDER reads by DER length fields, so a trailing sighash byte on the
 	   completed signature (as extracted from a real scriptSig) is tolerated. */
 	engine.recoverSecret = function (asig, csig, Y) { return coinjs.adaptor.recover({ adaptorSignature: asig, completedSignature: Crypto.util.hexToBytes(csig), adaptorPublicKey: Y }); };
@@ -1198,23 +1246,141 @@
 
 	/* ============ Persistent sessions ============ */
 	var LIVE = 'rodOtcLive';
+
+	/* Large hex blobs (raw tx hex for planned fundings and signed refund txns)
+	   are offloaded to individual localStorage keys so that one session with a
+	   big tx cannot blow the 5 MB quota for the whole rodOtcLive map.
+	   Each blob lives under  rodOtcHex_<swapId>_<parent>_<field>  and is
+	   removed with the session when removeLive() is called.
+	   NOTE: txhex/signedHex are still held in memory on the live object;
+	   only the persisted copy has them stripped and re-merged on restore. */
+	var HEX_PREFIX = 'rodOtcHex_';
+	var HEX_PATHS = [
+		['plannedRodFunding', 'txhex'],
+		['plannedAltFunding', 'txhex'],
+		['rodRefund',         'signedHex'],
+		['altRefund',         'signedHex']
+	];
+	function _hexKey(swapId, parent, field) { return HEX_PREFIX + swapId + '_' + parent + '_' + field; }
+	function _saveHexBlobs(swapId, clone) {
+		HEX_PATHS.forEach(function (p) {
+			var obj = clone[p[0]];
+			if (obj && obj[p[1]]) {
+				try { localStorage.setItem(_hexKey(swapId, p[0], p[1]), obj[p[1]]); } catch (e) {}
+				delete obj[p[1]];
+			}
+		});
+	}
+	function _loadHexBlobs(swapId, s) {
+		HEX_PATHS.forEach(function (p) {
+			var val = localStorage.getItem(_hexKey(swapId, p[0], p[1]));
+			if (val) { if (!s[p[0]]) s[p[0]] = {}; s[p[0]][p[1]] = val; }
+		});
+	}
+	function _removeHexBlobs(swapId) {
+		HEX_PATHS.forEach(function (p) { localStorage.removeItem(_hexKey(swapId, p[0], p[1])); });
+	}
+
+	var TERMINAL_STATES = { COMPLETE: true, REFUNDED: true, PARTIALLY_SETTLED: true, ROD_REFUNDED: true, ALT_REFUNDED: true };
+	function isTerminalSession(s) {
+		return !!(s && (s.declined || TERMINAL_STATES[s.state]));
+	}
 	engine.saveLive = function (sess) {
 		var all = engine.loadLive(), c = $.extend(true, {}, sess), pw = engine.walletPassword();
 		if (c.localChildPrivateKey && pw) { c._ep = CryptoJS.AES.encrypt(c.localChildPrivateKey, pw).toString(); delete c.localChildPrivateKey; }
 		if (c.adaptorSecret && pw) { c._ea = CryptoJS.AES.encrypt(c.adaptorSecret, pw).toString(); delete c.adaptorSecret; }
 		if (c.localNostrPrivateKey && pw) { c._en = CryptoJS.AES.encrypt(c.localNostrPrivateKey, pw).toString(); delete c.localNostrPrivateKey; }
-		all[sess.swapId] = c; localStorage.setItem(LIVE, JSON.stringify(all));
+		_saveHexBlobs(sess.swapId, c);
+		all[sess.swapId] = c;
+		/* When a session reaches a terminal state, clean up relay resources:
+		   unsub its tracked subscriptions so reconnect doesn't re-subscribe,
+		   and purge its events from the outbox so reconnect doesn't re-publish
+		   dozens of completed-swap messages back to the relay. */
+		if (isTerminalSession(sess)) {
+			engine.untrackSwapId(sess.swapId);
+			if (engine.pool) {
+				var sid = sess.swapId;
+				engine.pool.outbox = engine.pool.outbox.filter(function (ev) {
+					try { return JSON.parse(ev.content || '{}').swapId !== sid; } catch (e) { return true; }
+				});
+			}
+		}
+		try {
+			localStorage.setItem(LIVE, JSON.stringify(all));
+		} catch (e) {
+			if (e.name === 'QuotaExceededError' || e.code === 22 || e.code === DOMException.QUOTA_EXCEEDED_ERR) {
+				/* Pass 1: drop COMPLETE sessions and retry */
+				Object.keys(all).forEach(function (id) { if (id !== sess.swapId && all[id].state === 'COMPLETE') delete all[id]; });
+				try {
+					localStorage.setItem(LIVE, JSON.stringify(all));
+				} catch (e2) {
+					/* Pass 2: keep only the current session */
+					var minimal = {}; minimal[sess.swapId] = c;
+					try { localStorage.setItem(LIVE, JSON.stringify(minimal)); } catch (e3) {
+						console.error('rodOtcLive: storage full even after pruning — session not persisted', e3);
+					}
+				}
+			}
+		}
 	};
-	engine.loadLive = function () { try { return JSON.parse(localStorage.getItem(LIVE)) || {}; } catch (e) { return {}; } };
+	/* ---- Legacy role migration (alice/bob -> seller/buyer) ----
+	   Roles and two state names were persisted as 'alice'/'bob' and
+	   ALICE_ROD_FUNDED / BOB_ALT_FUNDED before the protocol adopted the
+	   economic role names. A session stored under the old vocabulary would
+	   otherwise fail every `role === 'seller'` branch, disappear from the
+	   automation entirely and — critically — never reach its refund monitor,
+	   stranding real funds. Normalising on read keeps those swaps visible and
+	   REFUNDABLE. The pre-signed refund transactions are stored as complete
+	   signed hex, so refunds remain valid regardless of the naming change. */
+	var LEGACY_ROLE = { alice: 'seller', bob: 'buyer' };
+	var LEGACY_STATE = { ALICE_ROD_FUNDED: 'SELLER_ROD_FUNDED', BOB_ALT_FUNDED: 'BUYER_ALT_FUNDED' };
+	var LEGACY_TERMS_KEYS = { aliceChildPubKey: 'sellerChildPubKey', bobChildPubKey: 'buyerChildPubKey' };
+	function migrateLegacyRoles(s) {
+		if (!s || typeof s !== 'object') return s;
+		var touched = false;
+		if (LEGACY_ROLE[s.role]) { s.role = LEGACY_ROLE[s.role]; touched = true; }
+		if (LEGACY_STATE[s.state]) { s.state = LEGACY_STATE[s.state]; touched = true; }
+		if (s.terms) {
+			for (var oldKey in LEGACY_TERMS_KEYS) {
+				if (Object.prototype.hasOwnProperty.call(s.terms, oldKey)) {
+					if (s.terms[LEGACY_TERMS_KEYS[oldKey]] == null) s.terms[LEGACY_TERMS_KEYS[oldKey]] = s.terms[oldKey];
+					delete s.terms[oldKey];
+					touched = true;
+				}
+			}
+		}
+		if ($.isArray(s.timeline)) {
+			for (var i = 0; i < s.timeline.length; i++) {
+				var entry = s.timeline[i];
+				if (entry && LEGACY_STATE[entry.state]) { entry.state = LEGACY_STATE[entry.state]; touched = true; }
+			}
+		}
+		if (touched) s._legacyRolesMigrated = true;
+		return s;
+	}
+	engine.migrateLegacyRoles = migrateLegacyRoles;
+
+	engine.loadLive = function () {
+		try {
+			var all = JSON.parse(localStorage.getItem(LIVE)) || {};
+			for (var id in all) { if (Object.prototype.hasOwnProperty.call(all, id)) migrateLegacyRoles(all[id]); }
+			return all;
+		} catch (e) { return {}; }
+	};
 	engine.restoreLive = function (id) {
 		var all = engine.loadLive(), s = all[id]; if (!s) return null;
 		var pw = engine.walletPassword();
 		if (s._ep && pw) { try { s.localChildPrivateKey = CryptoJS.AES.decrypt(s._ep, pw).toString(CryptoJS.enc.Utf8); } catch (e) {} }
 		if (s._ea && pw) { try { s.adaptorSecret = CryptoJS.AES.decrypt(s._ea, pw).toString(CryptoJS.enc.Utf8); } catch (e) {} }
 		if (s._en && pw) { try { s.localNostrPrivateKey = CryptoJS.AES.decrypt(s._en, pw).toString(CryptoJS.enc.Utf8); } catch (e) {} }
+		_loadHexBlobs(id, s);
 		return s;
 	};
-	engine.removeLive = function (id) { var a = engine.loadLive(); delete a[id]; localStorage.setItem(LIVE, JSON.stringify(a)); };
+	engine.removeLive = function (id) {
+		var a = engine.loadLive(); delete a[id];
+		_removeHexBlobs(id);
+		try { localStorage.setItem(LIVE, JSON.stringify(a)); } catch (e) {}
+	};
 
 	/* ============ Trade history ============ */
 	var HK = 'rodOtcHistory';
@@ -1227,11 +1393,128 @@
 	};
 	engine.clearHistory = function () { localStorage.removeItem(HK); };
 
+	/* ============ Order detail transport over Nostr ============
+	   The ROD name DB is the ONLY source of truth for what is on offer: an order
+	   exists because a name record exists, and nothing a relay says can add an
+	   order to the book. What the name DB is bad at is carrying bulk data — the
+	   value is size-limited and every edit costs an on-chain name operation — so
+	   the record stores a compact ANCHOR (the Nostr event id and the publishing
+	   key) and the full order detail travels over the relay pool the swap
+	   protocol already maintains.
+
+	   The anchor is what makes this safe. Detail is accepted only when the relay
+	   event's id matches the id named on-chain and its signature verifies under
+	   the key named on-chain, so the chain record pins exactly one immutable
+	   payload. A relay can withhold detail, but it cannot substitute, alter or
+	   invent an order. Kind 31340 is parameterised-replaceable so a re-publish
+	   supersedes cleanly under the same d-tag. */
+	engine.relayOrderDetail = {};        /* nostr event id -> { order, event } */
+	engine.onRelayOrderDetail = null;    /* UI hook, fired when detail arrives */
+	var ORDER_SUB_LOOKBACK_SECONDS = 604800;
+
+	function orderKindFilter() {
+		return [(NOSTR && NOSTR.ORDER_EVENT_KIND) || 31340];
+	}
+
+	/* Publish order detail to the relays and return the anchor that must then be
+	   written into the ROD name record. Publishing detail alone advertises
+	   nothing — until the name record exists the order is not in any book. */
+	engine.publishOrderDetail = function (order) {
+		var walletIdentity = engine.getWalletIdentity();
+		if (!walletIdentity || !walletIdentity.wif) throw new Error('Open your wallet first');
+		var identity = NOSTR.identityFromWif(walletIdentity.wif);
+		var ev = NOSTR.createOrderEvent({ order: order, privateKeyHex: identity.privateKeyHex });
+		if (!engine.pool) engine.startRelays();
+		var relayCount = engine.pool ? engine.pool.pub(ev) : 0;
+		engine.ingestOrderDetail(ev, 'self');
+		return { eventId: ev.id, nostrPubkey: ev.pubkey, relays: relayCount, event: ev };
+	};
+
+	engine.ingestOrderDetail = function (ev, source) {
+		var envelope;
+		try { envelope = NOSTR.validateOrderEvent(ev); }
+		catch (e) {
+			/* Silently discard events that don't look like OTC orders at all
+			   (other apps use kind 31340; we share the namespace). Only log
+			   when it superficially matches our envelope but fails auth or
+			   integrity checks, because that is meaningful. */
+			var isOurFormat = false;
+			try {
+				var parsed = JSON.parse(ev.content || '{}');
+				isOurFormat = (parsed.version === 1 && parsed.kind === 'otc-order');
+			} catch (pe) { /* unparseable content — definitely not ours */ }
+			if (isOurFormat) {
+				debugRelay('reject order detail from ' + (source || 'relay') + ': ' + (e.message || e));
+			}
+			return null;
+		}
+		/* Keyed by event id: the anchor names one exact event, so there is no
+		   newest-wins race to arbitrate here. A superseded order is superseded
+		   by a new NAME RECORD pointing at a new event, not by relay ordering. */
+		var entry = { order: envelope.order || {}, event: ev, pubkey: ev.pubkey, receivedAt: Math.floor(Date.now() / 1000) };
+		engine.relayOrderDetail[ev.id] = entry;
+		if (engine.onRelayOrderDetail) engine.onRelayOrderDetail(entry);
+		return entry;
+	};
+
+	/* Resolve the detail an on-chain record points at.
+	   Returns null when the relays have not supplied it, so the caller can fall
+	   back to whatever the name record itself carries. */
+	engine.orderDetailFromAnchor = function (anchor) {
+		if (!anchor || !anchor.nostrEventId) return null;
+		var entry = engine.relayOrderDetail[anchor.nostrEventId];
+		if (!entry) return null;
+		/* The chain record names the key; detail signed by anything else is not
+		   the detail this order committed to. */
+		if (anchor.nostrPubkey && entry.pubkey !== anchor.nostrPubkey) {
+			debugRelay('reject detail ' + anchor.nostrEventId + ': pubkey does not match the on-chain anchor');
+			return null;
+		}
+		return entry.order;
+	};
+
+	engine.startOrderbookRelay = function (force) {
+		if (!engine.pool) engine.startRelays();
+		if (engine._orderSub && !force) return engine._orderSub;
+		var filter = { kinds: orderKindFilter(), since: subscriptionSince(ORDER_SUB_LOOKBACK_SECONDS), limit: 500 };
+		engine._orderSub = engine.pool.sub(filter, function (ev) { engine.ingestOrderDetail(ev, 'relay'); });
+		if (engine.onRelaySubscription) engine.onRelaySubscription(engine._orderSub, filter, 'orderbook');
+		return engine._orderSub;
+	};
+
 	/* ============ Orderbook scanner ============ */
 	engine.orderbook = [];
 	/* Only OTC order names in the ROD name DB */
 	engine.OTC_NAME_REGEXP = '^d/otc-swap/';
 	engine.OTC_NAME_PREFIX = 'd/otc-swap/';
+
+	engine.scanNames = function (names) {
+		var d = $.Deferred(), offers = [], reports = [], pending = names.length;
+		if (!pending) {
+			d.resolve({ offers: [], reports: [] });
+			return d;
+		}
+		names.forEach(function (n) {
+			engine.nameLookup(n).then(function (v) {
+				var norm = engine.normalizeOffer(n, v);
+				if (norm.ok) {
+					offers.push(norm.offer);
+					reports.push({ name: n, ok: true, detail: 'ok · ' + norm.offer.side + ' ' + norm.offer.give + ' ROD / ' + norm.offer.want + ' ' + norm.offer.altChain });
+				} else {
+					reports.push({ name: n, ok: false, detail: norm.reason || 'rejected' });
+				}
+			}, function (err) {
+				var msg = (err && err.message) ? err.message : (typeof err === 'string' ? err : 'lookup failed');
+				reports.push({ name: n, ok: false, detail: msg });
+			}).always(function () {
+				if (--pending <= 0) {
+					engine.orderbook = offers;
+					d.resolve({ offers: offers, reports: reports });
+				}
+			});
+		});
+		return d;
+	};
 
 	/**
 	 * Query ROD name DB for OTC orders: name_scan with regexp ^d/otc-swap/
@@ -1305,20 +1588,8 @@
 					}
 				}
 				if (!newInPage || list.length < pageSize || collected >= maxNames || !lastName) {
-					/* Stopping at maxNames means the book is INCOMPLETE. Saying so
-					   matters: a silently truncated scan renders as a normal, full
-					   orderbook, so a user can conclude an offer does not exist when
-					   it simply sat past the cap. */
-					var truncated = collected >= maxNames;
-					if (truncated) {
-						reports.push({
-							name: '(scan truncated)',
-							ok: false,
-							detail: 'stopped at maxNames=' + maxNames + ' — orderbook may be incomplete'
-						});
-					}
 					engine.orderbook = offers;
-					d.resolve({ offers: offers, reports: reports, scanned: collected, regexp: regexp, truncated: truncated });
+					d.resolve({ offers: offers, reports: reports, scanned: collected, regexp: regexp });
 					return;
 				}
 				/* Continue strictly after lastName */

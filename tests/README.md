@@ -1,25 +1,64 @@
-# OTC swap end-to-end proof harness
+# Wallet and OTC proof gates
 
-Runs the real wallet (unmodified `index.html` + `js/`) in two headless Chromium
-contexts — Alice (sells ROD) and Bob (buys ROD with LTC) — against:
+The test system has two layers. Both are release gates; neither contacts a live
+chain or spends funds.
 
-- a mock ROD API (`api.spacexpanse.org` shape: sats in `/unspent`, coin floats in `/transaction`),
-- a mock LTC esplora (`litecoinspace.org/api` shape: sats everywhere, plain-text `POST /api/tx`),
-- a real local NIP-01 Nostr relay (`ws://`).
+## Fast deterministic gate
 
-Every broadcast transaction is **independently validated**: parsed with
-bitcoinjs-lib, legacy sighash recomputed, and every P2PKH / P2SH 2-of-2
-CHECKMULTISIG signature verified with noble secp256k1, plus value-balance,
-dust, and (LTC) min-relay-fee checks.
+Run from the repository root:
 
-## Run
-
-```
-npm install bitcoinjs-lib@6 bs58check@3 @noble/curves@1 ws@8 playwright@1
-node e2e-swap-test.js                # full swap, 24 checks
-RELOAD_TEST=1 node e2e-swap-test.js  # + mid-swap page reload resilience
-REGRESSION=1 node e2e-swap-test.js   # patches coinjs API bases directly
+```bash
+bash tests/run-fast.sh
 ```
 
-The harness exercises a 0.05 LTC swap on purpose — any amount below 0.21 LTC
-(21,000,000 sats) triggered the historical satoshi/coin unit bug.
+This needs Node.js only and covers:
+
+- release integrity: missing assets, JavaScript syntax, script order, merge
+  markers, SHA-256 inventory, version identity, service-worker completeness,
+  CSP/API alignment, duplicate selector IDs, support-registry drift, and
+  agreement between production refund/confirmation/fee policy and the browser
+  settlement matrix;
+- explorer contracts: Esplora, BlockCypher, Blockchair, and Blockbook response
+  normalization, malformed responses, broadcast shapes, request coalescing,
+  and retry isolation after failure;
+- protocol adversarial cases: unsigned/tampered Nostr events, signer-to-ROD
+  binding, canonical terms mismatch, refund-order timing and boundary cases,
+  and bilateral DOGE reconstruction;
+- wallet races: DGB → ROD/LTC switching, address changes, late callbacks,
+  DGB default migration, and custom-endpoint preservation;
+- negative controls: seven deliberate blocker mutations must make the relevant
+  tests fail. A suite that still passes after its guard is removed is itself
+  considered broken.
+
+Use `SKIP_MUTATIONS=1` only for a quick local edit loop. CI runs mutations.
+
+## Full browser and settlement gate
+
+Install the pinned dependencies and Chromium:
+
+```bash
+cd tests/harness
+npm ci
+npx playwright install --with-deps chromium
+bash run-all.sh
+```
+
+In addition to the fast gate, this loads the unmodified `index.html` in real
+Chromium, checks browser globals and DOM wiring, installs the service worker,
+reloads the full shell offline, and runs two peers through the independently
+validated settlement matrix for every chain in the shipped OTC registry.
+
+The current matrix is LTC and DOGE:
+
+- happy settlement;
+- seller/ROD-leg refund;
+- buyer/counter-leg refund;
+- mid-swap reload and recovery.
+
+BTC, BCH, and DGB remain wallet-only in this release. The release gate requires
+the OTC definitions, fee table, engine defaults, e2e registry, UI selector, and
+matrix runner to agree, so a future chain cannot be half-added.
+
+Reports are written as `tests/harness/e2e-report-<chain>-<scenario>.json`.
+Failed scenarios write the same report before exiting, including page/session
+diagnostics and unexpected browser console, request, and HTTP errors.

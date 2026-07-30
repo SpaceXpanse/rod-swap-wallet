@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 22
       - name: Run deterministic release gates
-        run: chmod +x run-fast.sh && bash tests/run-fast.sh
+        run: chmod +x tests/run-fast.sh && bash tests/run-fast.sh
 
   browser-settlement:
     name: Chromium and settlement matrix
@@ -47,7 +47,7 @@ jobs:
         env:
           SKIP_MUTATIONS: "1"
           CI: "true"
-        run:  chmod +x run-all.sh && bash tests/harness/run-all.sh
+        run:  chmod +x tests/harness/run-all.sh && bash tests/harness/run-all.sh
       - name: Upload scenario reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v5

@@ -1261,6 +1261,29 @@
 		['rodRefund',         'signedHex'],
 		['altRefund',         'signedHex']
 	];
+	var RECOVERY_VERSION = 1;
+	var RECOVERY_TYPE = 'rod-otc-recovery';
+	var RECOVERY_MAX_BYTES = 8 * 1024 * 1024;
+	var RECOVERY_SENSITIVE_FIELDS = {
+		localChildPrivateKey: true,
+		privateKeyHex: true,
+		privateKeyWif: true,
+		xprv: true,
+		adaptorSecret: true,
+		localNostrPrivateKey: true
+	};
+	var RECOVERY_SEALED_FIELDS = {
+		localChildPrivateKey: '_ep',
+		adaptorSecret: '_ea',
+		localNostrPrivateKey: '_en'
+	};
+	var RECOVERY_LOCAL_CONFIG_FIELDS = {
+		rpcUrl: true,
+		rpcPort: true,
+		rpcUser: true,
+		rpcPass: true,
+		rpcWallet: true
+	};
 	function _hexKey(swapId, parent, field) { return HEX_PREFIX + swapId + '_' + parent + '_' + field; }
 	function _saveHexBlobs(swapId, clone) {
 		HEX_PATHS.forEach(function (p) {
@@ -1279,6 +1302,156 @@
 	}
 	function _removeHexBlobs(swapId) {
 		HEX_PATHS.forEach(function (p) { localStorage.removeItem(_hexKey(swapId, p[0], p[1])); });
+	}
+	function _eachStorageKey(prefix, fn) {
+		if (!localStorage || typeof localStorage.length !== 'number' || typeof localStorage.key !== 'function') return;
+		var keys = [];
+		for (var i = 0; i < localStorage.length; i++) {
+			var key = localStorage.key(i);
+			if (!prefix || (key && key.indexOf(prefix) === 0)) keys.push(key);
+		}
+		for (var j = 0; j < keys.length; j++) fn(keys[j]);
+	}
+	function _stableStringify(value) {
+		if (value === null || typeof value !== 'object') return JSON.stringify(value);
+		if ($.isArray(value)) {
+			var arrayParts = [];
+			for (var ai = 0; ai < value.length; ai++) arrayParts.push(_stableStringify(value[ai]));
+			return '[' + arrayParts.join(',') + ']';
+		}
+		var keys = [];
+		for (var name in value) if (Object.prototype.hasOwnProperty.call(value, name)) keys.push(name);
+		keys.sort();
+		var objectParts = [];
+		for (var ki = 0; ki < keys.length; ki++) objectParts.push(JSON.stringify(keys[ki]) + ':' + _stableStringify(value[keys[ki]]));
+		return '{' + objectParts.join(',') + '}';
+	}
+	function _checksum(value) {
+		return Crypto.util.bytesToHex(Crypto.SHA256(Crypto.charenc.UTF8.stringToBytes(_stableStringify(value)), { asBytes: true }));
+	}
+	function _plainRecord(value) {
+		return !!value && Object.prototype.toString.call(value) === '[object Object]';
+	}
+	function _sessionMatchesWallet(session, walletWif) {
+		try {
+			if (!walletWif || !session || !session.terms) return false;
+			var account = engine.deriveSwapAccount(walletWif);
+			var expected = session.role === 'seller'
+				? session.terms.sellerSwapXpub
+				: (session.role === 'buyer' ? session.terms.buyerSwapXpub : '');
+			return !!expected && engine.sameExtendedKey(account.pubkey, expected);
+		} catch (e) { return false; }
+	}
+	function _sanitizeRecoveryConfig(config) {
+		var sanitized = $.extend(true, {}, config || {});
+		for (var field in RECOVERY_LOCAL_CONFIG_FIELDS) {
+			if (Object.prototype.hasOwnProperty.call(sanitized, field)) delete sanitized[field];
+		}
+		return sanitized;
+	}
+	function _prepareRecoverySession(session, walletWif) {
+		var sanitized = $.extend(true, {}, session || {});
+		for (var rawField in RECOVERY_SEALED_FIELDS) {
+			if (!Object.prototype.hasOwnProperty.call(sanitized, rawField)) continue;
+			var rawValue = sanitized[rawField];
+			var sealedField = RECOVERY_SEALED_FIELDS[rawField];
+			if (rawValue && !sanitized[sealedField]) {
+				if (!_sessionMatchesWallet(sanitized, walletWif)) {
+					throw new Error('Swap ' + (sanitized.swapId || '(unknown)') +
+						' contains unsealed recovery secrets. Open the same wallet that created it, then export again.');
+				}
+				sanitized[sealedField] = CryptoJS.AES.encrypt(rawValue, walletWif).toString();
+			}
+			delete sanitized[rawField];
+		}
+		for (var field in RECOVERY_SENSITIVE_FIELDS) {
+			if (Object.prototype.hasOwnProperty.call(sanitized, field)) delete sanitized[field];
+		}
+		/* Automation locks describe one page run, not durable protocol state. */
+		delete sanitized.automation;
+		return migrateLegacyRoles(sanitized);
+	}
+	function _validateImportedSession(swapId, session) {
+		if (!swapId || swapId.length > 256 || /[\u0000-\u001f]/.test(swapId) ||
+			swapId === '__proto__' || swapId === 'prototype' || swapId === 'constructor') {
+			throw new Error('OTC recovery backup contains an invalid swap ID');
+		}
+		if (!_plainRecord(session) || String(session.swapId || '') !== swapId ||
+			!_plainRecord(session.terms) || (session.role !== 'seller' && session.role !== 'buyer')) {
+			throw new Error('OTC recovery backup contains an invalid session for ' + swapId);
+		}
+		for (var field in RECOVERY_SENSITIVE_FIELDS) {
+			if (Object.prototype.hasOwnProperty.call(session, field)) {
+				throw new Error('OTC recovery backup contains an unencrypted sensitive field: ' + field);
+			}
+		}
+		var sanitized = $.extend(true, {}, session);
+		delete sanitized.automation;
+		return migrateLegacyRoles(sanitized);
+	}
+	function _collectHexBlobs(live) {
+		var blobs = {};
+		for (var swapId in (live || {})) {
+			if (!Object.prototype.hasOwnProperty.call(live, swapId)) continue;
+			HEX_PATHS.forEach(function (p) {
+				var key = _hexKey(swapId, p[0], p[1]);
+				var value = localStorage.getItem(key);
+				if (value) blobs[key] = value;
+			});
+		}
+		return blobs;
+	}
+	function _makeRecoveryEnvelope(payload) {
+		return {
+			version: RECOVERY_VERSION,
+			type: RECOVERY_TYPE,
+			updatedAt: new Date().toISOString(),
+			payload: payload,
+			checksum: _checksum(payload)
+		};
+	}
+	function _validateRecoveryEnvelope(envelope) {
+		if (!_plainRecord(envelope) || envelope.version !== RECOVERY_VERSION || envelope.type !== RECOVERY_TYPE ||
+			!_plainRecord(envelope.payload) || !envelope.checksum) {
+			throw new Error('Unsupported or incomplete OTC recovery backup');
+		}
+		if (_checksum(envelope.payload) !== envelope.checksum) throw new Error('OTC recovery checksum mismatch');
+		if (!_plainRecord(envelope.payload.live)) throw new Error('OTC recovery backup is missing live sessions');
+		if (!_plainRecord(envelope.payload.hexBlobs)) throw new Error('OTC recovery backup is missing recovery blobs');
+		if (envelope.payload.config != null && !_plainRecord(envelope.payload.config)) {
+			throw new Error('OTC recovery backup contains invalid settings');
+		}
+		if (envelope.payload.history != null && !$.isArray(envelope.payload.history)) {
+			throw new Error('OTC recovery backup contains invalid history');
+		}
+		return envelope;
+	}
+	function _recoveryStorageSnapshot() {
+		var snapshot = {};
+		[ LIVE, CFG_KEY, HK ].forEach(function (key) { snapshot[key] = localStorage.getItem(key); });
+		_eachStorageKey(HEX_PREFIX, function (key) { snapshot[key] = localStorage.getItem(key); });
+		return snapshot;
+	}
+	function _restoreRecoveryStorage(snapshot) {
+		_eachStorageKey(HEX_PREFIX, function (key) { localStorage.removeItem(key); });
+		[ LIVE, CFG_KEY, HK ].forEach(function (key) { localStorage.removeItem(key); });
+		for (var key in snapshot) {
+			if (Object.prototype.hasOwnProperty.call(snapshot, key) && snapshot[key] != null) {
+				localStorage.setItem(key, snapshot[key]);
+			}
+		}
+		engine.applyApiConfig(engine.loadConfig());
+	}
+	function _mergeRecoveryHistory(current, imported) {
+		var merged = [], seenHistory = {};
+		(current || []).concat(imported || []).forEach(function (entry) {
+			if (!_plainRecord(entry) || merged.length >= 100) return;
+			var key = [entry.swapId || '', entry.state || '', entry.completedAt || '', entry.orderId || ''].join('|');
+			if (seenHistory[key]) return;
+			seenHistory[key] = true;
+			merged.push(entry);
+		});
+		return merged;
 	}
 
 	var TERMINAL_STATES = { COMPLETE: true, REFUNDED: true, PARTIALLY_SETTLED: true, ROD_REFUNDED: true, ALT_REFUNDED: true };
@@ -1380,6 +1553,104 @@
 		var a = engine.loadLive(); delete a[id];
 		_removeHexBlobs(id);
 		try { localStorage.setItem(LIVE, JSON.stringify(a)); } catch (e) {}
+	};
+	engine.exportRecoveryState = function () {
+		var live = engine.loadLive();
+		var sanitizedLive = {};
+		var walletWif = engine.walletPassword();
+		for (var swapId in live) {
+			if (Object.prototype.hasOwnProperty.call(live, swapId)) {
+				sanitizedLive[swapId] = _prepareRecoverySession(live[swapId], walletWif);
+			}
+		}
+		var payload = {
+			live: sanitizedLive,
+			hexBlobs: _collectHexBlobs(live),
+			/* Local Core RPC details may contain credentials or only make sense
+			   on this machine. Public API/relay preferences remain portable. */
+			config: _sanitizeRecoveryConfig(engine.loadConfig()),
+			history: engine.getHistory ? engine.getHistory() : []
+		};
+		return JSON.stringify(_makeRecoveryEnvelope(payload), null, 2);
+	};
+	engine.importRecoveryState = function (serializedValue) {
+		if (typeof serializedValue !== 'string' || !serializedValue.trim()) {
+			throw new Error('Paste an OTC recovery backup before importing');
+		}
+		if (serializedValue.length > RECOVERY_MAX_BYTES) throw new Error('OTC recovery backup is too large');
+		var envelope = _validateRecoveryEnvelope(JSON.parse(serializedValue));
+		var importedLive = {};
+		for (var swapId in envelope.payload.live) {
+			if (Object.prototype.hasOwnProperty.call(envelope.payload.live, swapId)) {
+				importedLive[swapId] = _validateImportedSession(swapId, envelope.payload.live[swapId]);
+			}
+		}
+		var allowedBlobs = {};
+		for (var id in importedLive) {
+			if (!Object.prototype.hasOwnProperty.call(importedLive, id)) continue;
+			HEX_PATHS.forEach(function (p) { allowedBlobs[_hexKey(id, p[0], p[1])] = true; });
+		}
+		var validBlobs = {};
+		for (var blobKey in envelope.payload.hexBlobs) {
+			if (!Object.prototype.hasOwnProperty.call(envelope.payload.hexBlobs, blobKey)) continue;
+			var blobValue = envelope.payload.hexBlobs[blobKey];
+			if (!allowedBlobs[blobKey] || typeof blobValue !== 'string' ||
+				!blobValue || blobValue.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(blobValue)) {
+				throw new Error('OTC recovery backup contains an invalid recovery blob: ' + blobKey);
+			}
+			validBlobs[blobKey] = blobValue;
+		}
+
+		/* Never let an older backup silently overwrite a live local session.
+		   Non-conflicting sessions are merged, so import is additive. */
+		var currentLive = engine.loadLive();
+		var conflicts = [];
+		for (var importedId in importedLive) {
+			if (Object.prototype.hasOwnProperty.call(importedLive, importedId) &&
+				Object.prototype.hasOwnProperty.call(currentLive, importedId)) conflicts.push(importedId);
+		}
+		if (conflicts.length) {
+			throw new Error('Recovery import would overwrite existing swap(s): ' + conflicts.join(', ') +
+				'. Remove those local sessions only if you intentionally want to replace them.');
+		}
+		var mergedLive = {};
+		for (var currentId in currentLive) {
+			if (Object.prototype.hasOwnProperty.call(currentLive, currentId)) mergedLive[currentId] = currentLive[currentId];
+		}
+		for (var newId in importedLive) {
+			if (Object.prototype.hasOwnProperty.call(importedLive, newId)) mergedLive[newId] = importedLive[newId];
+		}
+		var currentConfig = engine.loadConfig();
+		var importedConfig = _sanitizeRecoveryConfig(envelope.payload.config || {});
+		var mergedConfig = $.extend({}, currentConfig, importedConfig);
+		if ($.isArray(importedConfig.relays)) mergedConfig.relays = importedConfig.relays.slice();
+		for (var localField in RECOVERY_LOCAL_CONFIG_FIELDS) {
+			if (Object.prototype.hasOwnProperty.call(currentConfig, localField)) {
+				mergedConfig[localField] = currentConfig[localField];
+			}
+		}
+		var mergedHistory = _mergeRecoveryHistory(engine.getHistory(), envelope.payload.history || []);
+		var snapshot = _recoveryStorageSnapshot();
+		try {
+			localStorage.setItem(LIVE, JSON.stringify(mergedLive));
+			for (var validBlobKey in validBlobs) {
+				if (Object.prototype.hasOwnProperty.call(validBlobs, validBlobKey)) {
+					localStorage.setItem(validBlobKey, validBlobs[validBlobKey]);
+				}
+			}
+			engine.saveConfig(mergedConfig);
+			localStorage.setItem(HK, JSON.stringify(mergedHistory));
+		} catch (writeError) {
+			try { _restoreRecoveryStorage(snapshot); } catch (rollbackError) {
+				throw new Error('Recovery import failed and local rollback also failed: ' + (rollbackError.message || rollbackError));
+			}
+			throw new Error('Recovery import failed; existing local state was restored: ' + (writeError.message || writeError));
+		}
+		return {
+			sessions: Object.keys(importedLive).length,
+			hexBlobs: Object.keys(validBlobs).length,
+			importedSwapIds: Object.keys(importedLive)
+		};
 	};
 
 	/* ============ Trade history ============ */

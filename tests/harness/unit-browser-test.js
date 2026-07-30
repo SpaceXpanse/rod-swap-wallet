@@ -31,12 +31,10 @@ function launchOptions() {
 		args = JSON.parse(process.env.PLAYWRIGHT_CHROMIUM_ARGS_JSON);
 		if (!Array.isArray(args)) throw new Error('PLAYWRIGHT_CHROMIUM_ARGS_JSON must be a JSON array');
 	}
-	const unsafe = (args || []).find((arg) => /^--single-process(?:=|$)/.test(String(arg)));
-	if (unsafe) {
-		throw new Error(
-			'Unsafe Chromium argument ' + unsafe + ': --single-process invalidates browser-context isolation'
-		);
-	}
+	/* This gate uses only one browser context at a time. The two-peer e2e
+	   runner separately rejects --single-process because Alice/Bob isolation
+	   is protocol evidence there; applying that restriction here needlessly
+	   prevents the shell/PWA wiring checks on serverless Chromium. */
 	if (configured) return { executablePath: configured, args };
 	if (fs.existsSync('/opt/pw-browsers/chromium')) {
 		return { executablePath: '/opt/pw-browsers/chromium', args };
@@ -65,7 +63,7 @@ async function loadApp(browser, serviceWorkers) {
 
 async function main() {
 	const server = await staticServer(APP_DIR, PORT);
-	const browser = await chromium.launch(launchOptions());
+	let browser = await chromium.launch(launchOptions());
 	try {
 		const loaded = await loadApp(browser, 'block');
 		const page = loaded.page;
@@ -192,7 +190,60 @@ async function main() {
 				chainChecks.unsafeRejected === true
 		);
 
+		const recoveryUi = await page.evaluate(() => {
+			const engine = window.rodOtc.engine;
+			const swapId = 'a'.repeat(64);
+			engine.saveLive({
+				swapId,
+				role: 'seller',
+				state: 'COMPLETE',
+				terms: {
+					termsHash: 'browser-recovery-terms',
+					altChain: 'DOGE',
+					rodAmount: '1.00000000',
+					altAmount: '2.00000000'
+				},
+				rodRefund: { signedHex: 'aa'.repeat(120) }
+			});
+			const backup = engine.exportRecoveryState();
+			engine.removeLive(swapId);
+			let tracked = '';
+			const originalTrack = engine.trackSwapId;
+			engine.trackSwapId = (id) => { tracked = id; return 'test-subscription'; };
+			$('#cfgBackup').val(backup);
+			$('#cfgImport').trigger('click');
+			engine.trackSwapId = originalTrack;
+			const restored = engine.restoreLive(swapId);
+			const result = {
+				tracked,
+				state: restored && restored.state,
+				refundHex: restored && restored.rodRefund && restored.rodRefund.signedHex,
+				flash: $('#otcFlash').text(),
+				rendered: $('#otcSwapList').text()
+			};
+			engine.removeLive(swapId);
+			return result;
+		});
+		step(
+			'Settings recovery buttons restore, track, and render the real live swap store',
+			recoveryUi.tracked === 'a'.repeat(64) &&
+				recoveryUi.state === 'COMPLETE' &&
+				recoveryUi.refundHex === 'aa'.repeat(120) &&
+				/Imported recoverable OTC backup/.test(recoveryUi.flash) &&
+				/COMPLETE/.test(recoveryUi.rendered),
+			JSON.stringify({
+				tracked: recoveryUi.tracked.slice(0, 12),
+				state: recoveryUi.state,
+				hasRefund: recoveryUi.refundHex === 'aa'.repeat(120),
+				flash: recoveryUi.flash
+			})
+		);
+
 		await loaded.context.close();
+		/* The PWA phase is independent. Relaunching also supports serverless
+		   single-process builds, which exit when their only context closes. */
+		await browser.close();
+		browser = await chromium.launch(launchOptions());
 
 		const pwa = await loadApp(browser, 'allow');
 		const pwaReady = await pwa.page.evaluate(async () => {

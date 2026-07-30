@@ -18,8 +18,9 @@ probe used by settlement polling.
 
 Before a settlement scenario starts, the harness proves that Alice and Bob
 have independent browser storage, wallet identities, swap xpubs, Nostr keys,
-and empty session stores. Chromium `--single-process` mode is rejected because
-it invalidates that isolation. The pre-funding handshake uses separate,
+and empty session stores. Chromium `--single-process` mode is rejected by the
+two-peer settlement runner because it invalidates that isolation; the
+single-context shell/PWA gate can still run in that mode. The pre-funding handshake uses separate,
 role-aware deadlines for readiness, adaptor commitment, funding plans, refund
 signatures, adaptor signatures, local PREPARED, and remote PREPARED. A timeout
 report names the exact missing prerequisites and includes pending signature
@@ -49,8 +50,21 @@ Useful controls:
 - `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chromium` — use a preinstalled
   browser.
 - `PLAYWRIGHT_CHROMIUM_ARGS_JSON='["--flag"]'` — pass host-specific launch
-  flags when a custom browser binary requires them. `--single-process` is
-  intentionally forbidden.
+  flags when a custom browser binary requires them. `--single-process` remains
+  forbidden for the two-peer settlement runner, but the single-context
+  shell/PWA gate in [`tests/harness/unit-browser-test.js`](unit-browser-test.js)
+  may still run under it.
+
+## Recovery and reload notes
+
+- [`tests/harness/unit-browser-test.js`](unit-browser-test.js) now checks that
+  the OTC Settings export/import buttons restore a real live swap, resubscribe
+  tracking, render the swap list, and surface the expected success flash.
+- [`tests/harness/e2e-swap-test.js`](e2e-swap-test.js) records expected
+  reload-time `net::ERR_ABORTED` events separately from genuine browser issues.
+  Only the transient local ROD `/info` health probe is allowed to abort during
+  the deliberate reload scenario; every other failed request still fails the
+  release gate.
 
 `run-all.sh` is deliberately sequential. The mock servers use fixed ports and
 the swap automation is timing-sensitive; parallel cases would create harness

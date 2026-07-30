@@ -48,12 +48,29 @@ Chromium, checks browser globals and DOM wiring, installs the service worker,
 reloads the full shell offline, and runs two peers through the independently
 validated settlement matrix for every chain in the shipped OTC registry.
 
+The browser-side gate is intentionally split:
+
+- [`tests/harness/unit-browser-test.js`](harness/unit-browser-test.js) is a
+  single-context shell/PWA and OTC-settings invariant check. It can still run
+  when host Chromium requires `--single-process`.
+- [`tests/harness/e2e-swap-test.js`](harness/e2e-swap-test.js) is the two-peer
+  settlement proof. It rejects `--single-process` because Alice/Bob storage and
+  identity isolation are protocol evidence there.
+
 The current matrix is LTC and DOGE:
 
 - happy settlement;
 - seller/ROD-leg refund;
 - buyer/counter-leg refund;
-- mid-swap reload and recovery.
+- mid-swap reload and recovery, including persistence of signed refunds and the
+  only allowed deliberate reload-time abort of the transient local ROD health
+  probe.
+
+[`tests/security-regression.js`](security-regression.js) now also proves the OTC
+recovery export/import boundary: exports must exclude raw wallet/adaptor/Nostr
+secrets and local RPC credentials, imports must reject tampering and unexpected
+blob keys, and partial storage-write failures must roll back to the prior local
+state.
 
 BTC, BCH, and DGB remain wallet-only in this release. The release gate requires
 the OTC definitions, fee table, engine defaults, e2e registry, UI selector, and

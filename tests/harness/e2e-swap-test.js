@@ -43,6 +43,9 @@ const { MockChain, rodApiServer, esploraServer, blockcypherServer, nostrRelay, s
 const APP_DIR = process.env.APP_DIR || path.resolve(__dirname, '..', '..');
 const SCENARIO = process.env.SCENARIO || 'happy';
 const HARNESS_REPEAT_INDEX = process.env.HARNESS_REPEAT_INDEX || '';
+if (HARNESS_REPEAT_INDEX && !/^[1-9][0-9]*$/.test(HARNESS_REPEAT_INDEX)) {
+  throw new Error('HARNESS_REPEAT_INDEX must be a positive integer');
+}
 const REPORT_REPEAT_SUFFIX = HARNESS_REPEAT_INDEX ? `-repeat-${HARNESS_REPEAT_INDEX}` : '';
 /* Which chain the counter leg runs on. Everything below is derived from this,
    so the identical proof runs against Litecoin-over-Esplora and
@@ -112,7 +115,9 @@ const runtime = {
   relay: null,
   servers: [],
   swapId: '',
-  browserIssues: []
+  browserIssues: [],
+  reloadAbortUntil: {},
+  expectedReloadAborts: []
 };
 function step(name, ok, detail) {
   results.steps.push({ name, ok, detail: detail || '' });
@@ -126,6 +131,16 @@ function expectedTransientApiResponse(urlValue, status) {
   if (url.hostname !== '127.0.0.1' || Number(url.port) !== PORTS.alt) return false;
   return /^\/api\/tx\/[0-9a-f]{64}(?:\/hex)?$/i.test(url.pathname) ||
     /^\/txs\/[0-9a-f]{64}$/i.test(url.pathname);
+}
+
+function expectedDeliberateReloadAbort(label, request) {
+  if (process.env.RELOAD_TEST !== '1' || Date.now() > (runtime.reloadAbortUntil[label] || 0)) return false;
+  const failure = request.failure();
+  if (!failure || failure.errorText !== 'net::ERR_ABORTED') return false;
+  const url = new URL(request.url());
+  return url.hostname === '127.0.0.1' &&
+    Number(url.port) === PORTS.rod &&
+    url.pathname === '/info';
 }
 
 function rejectUnsafeChromiumArgs(args) {
@@ -461,6 +476,14 @@ async function main() {
       });
     });
     page.on('requestfailed', (request) => {
+      if (expectedDeliberateReloadAbort(label, request)) {
+        runtime.expectedReloadAborts.push({
+          page: label,
+          detail: request.url(),
+          error: request.failure().errorText
+        });
+        return;
+      }
       runtime.browserIssues.push({
         page: label, type: 'requestfailed', detail: request.url(),
         error: request.failure() ? request.failure().errorText : ''
@@ -662,6 +685,7 @@ async function main() {
     rodBroadcasts: rodChain.broadcasts,
     altBroadcasts: altChain.broadcasts,
     browserIssues: runtime.browserIssues,
+    expectedReloadAborts: runtime.expectedReloadAborts,
     relayDiagnostics: relayDiagnostics(swapId),
     relayEventTypes: relay.events.map((e) => {
       try { return JSON.parse(e.content).type; } catch (err) { return 'unknown'; }
@@ -708,6 +732,10 @@ async function main() {
     }
 
     if (process.env.RELOAD_TEST === '1') {
+      /* Navigation intentionally cancels in-flight requests. Only the local
+         ROD /info health probe is expected; every other failure remains a
+         release blocker. */
+      runtime.reloadAbortUntil.alice = Date.now() + 5000;
       await alice.reload({ waitUntil: 'load' });
       await alice.waitForFunction(() => window.rodOtc && window.rodOtc.engine && window.jQuery);
       await setWallet(alice, aliceWallet);
@@ -718,6 +746,10 @@ async function main() {
         return !!(s && s.remoteAltAdaptorSignature && s.rodRefund && s.rodRefund.signedHex && s.adaptorSecret);
       }, swapId);
       step('after reload: adaptor sig, refund and secret persisted', persisted);
+      if (runtime.expectedReloadAborts.length) {
+        step('deliberate reload aborts only the transient local health probe', true,
+          runtime.expectedReloadAborts.length + ' expected request abort(s)');
+      }
     }
 
     // release the claim height gate
@@ -901,6 +933,7 @@ main().catch(async (e) => {
     error: e && (e.stack || e.message) || String(e),
     steps: results.steps,
     browserIssues: runtime.browserIssues,
+    expectedReloadAborts: runtime.expectedReloadAborts,
     rodBroadcasts: runtime.rodChain ? runtime.rodChain.broadcasts : [],
     altBroadcasts: runtime.altChain ? runtime.altChain.broadcasts : [],
     relayDiagnostics: relayDiagnostics(runtime.swapId),

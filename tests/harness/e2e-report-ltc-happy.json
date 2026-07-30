@@ -1,6 +1,6 @@
 {
   "scenario": "happy",
-  "swapId": "189623c8899c1bf37b9127351aaa62de52d1454757ade616ff3dea9141749fa7",
+  "swapId": "de2255d076d8d36162fec07267d422ef7106031dc7c05568b167edab51db0d18",
   "steps": [
     {
       "name": "Alice and Bob browser storage is isolated",
@@ -35,12 +35,12 @@
     {
       "name": "alice created swap session",
       "ok": true,
-      "detail": "swapId 189623c8899c1bf3…"
+      "detail": "swapId de2255d076d8d361…"
     },
     {
       "name": "terms include refund heights + confirmations + 5-field swapId nonce",
       "ok": true,
-      "detail": "{\"refundRodHeight\":500480,\"altRefundLockHeight\":500024,\"rodConfirmations\":1,\"altConfirmations\":1,\"sellerRodRefundAddress\":\"RLap44VngynVG3z6Spgbtz7Vmi4BNCsw5g\",\"buyerAltRefundAddress\":\"LbHc4BK2sPpbW7FSUr8vKpKDM4x1LHcqPw\",\"nonce\":\"df21fd146261befc8c4c44f231eaca28\"}"
+      "detail": "{\"refundRodHeight\":500480,\"altRefundLockHeight\":500024,\"rodConfirmations\":1,\"altConfirmations\":1,\"sellerRodRefundAddress\":\"RDb1dvYmqH56SEvshpARtfdVQBUp7aoQ4c\",\"buyerAltRefundAddress\":\"LVRAZsLeGncFZHAX4Lt3EevxLu6JKpGkq5\",\"nonce\":\"3563ea88e4d0eeccfbbe3ce12a92bf75\"}"
     },
     {
       "name": "bob auto-created session from incoming terms",
@@ -60,37 +60,37 @@
     {
       "name": "protocol stage: bilateral acceptance and readiness",
       "ok": true,
-      "detail": "532 ms"
+      "detail": "536 ms"
     },
     {
       "name": "protocol stage: adaptor-point commitment received by both peers",
       "ok": true,
-      "detail": "1173 ms"
+      "detail": "1287 ms"
     },
     {
       "name": "protocol stage: both planned funding transactions exchanged",
       "ok": true,
-      "detail": "1791 ms"
+      "detail": "1972 ms"
     },
     {
       "name": "protocol stage: both timelocked refund exchanges completed",
       "ok": true,
-      "detail": "1819 ms"
+      "detail": "1796 ms"
     },
     {
       "name": "protocol stage: both claim adaptor signatures exchanged and verified",
       "ok": true,
-      "detail": "1322 ms"
+      "detail": "1399 ms"
     },
     {
       "name": "protocol stage: both peers persisted local PREPARED",
       "ok": true,
-      "detail": "415 ms"
+      "detail": "433 ms"
     },
     {
       "name": "protocol stage: both peers observed counterparty PREPARED",
       "ok": true,
-      "detail": "132 ms"
+      "detail": "127 ms"
     },
     {
       "name": "both sides PREPARED: planned fundings, pre-signed refunds, verified adaptor signatures",
@@ -105,12 +105,12 @@
     {
       "name": "ROD funding tx broadcast & independently validated",
       "ok": true,
-      "detail": "input 0: P2PKH signature valid (pubkey 0279e502870ec497…) | fee 51900 sats over 224 bytes (231.70 sat/B)"
+      "detail": "input 0: P2PKH signature valid (pubkey 03d120b86e77c8db…) | fee 51900 sats over 224 bytes (231.70 sat/B)"
     },
     {
       "name": "ROD funding txid equals PLANNED txid (refunds/adaptor sigs bind to it)",
       "ok": true,
-      "detail": "eed32a306c97933d… vs planned eed32a306c97933d…"
+      "detail": "b649be49cf699ca0… vs planned b649be49cf699ca0…"
     },
     {
       "name": "pre-signed ROD refund rejected as non-final before lock height",
@@ -125,7 +125,7 @@
     {
       "name": "LTC funding tx broadcast & independently validated (0.05000000 LTC)",
       "ok": true,
-      "detail": "input 0: P2PKH signature valid (pubkey 03071388fd0fc2e6…) | fee 1000 sats over 223 bytes (4.48 sat/B)"
+      "detail": "input 0: P2PKH signature valid (pubkey 027f6d14a5e13f81…) | fee 1000 sats over 223 bytes (4.48 sat/B)"
     },
     {
       "name": "LTC funding txid equals PLANNED txid",
@@ -135,7 +135,7 @@
     {
       "name": "LTC claim tx (2-of-2 P2SH, completed adaptor sig) broadcast & independently validated",
       "ok": true,
-      "detail": "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 1000 sats over 302 bytes (3.31 sat/B)"
+      "detail": "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 1000 sats over 303 bytes (3.30 sat/B)"
     },
     {
       "name": "recovered secret verifies against adaptor point (yG == Y)",
@@ -145,7 +145,7 @@
     {
       "name": "ROD claim tx (2-of-2 P2SH, completed adaptor sig) broadcast & independently validated",
       "ok": true,
-      "detail": "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 51900 sats over 303 bytes (171.29 sat/B)"
+      "detail": "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order) | fee 51900 sats over 304 bytes (170.72 sat/B)"
     },
     {
       "name": "bob session COMPLETE",
@@ -160,12 +160,12 @@
     {
       "name": "alice received LTC at her payout address",
       "ok": true,
-      "detail": "4999000 sats at LZWnqF5ryE4Pjx9tnSCupUJNMuM1RuT6Ct"
+      "detail": "4999000 sats at LPZXoKiFXHamREZCN8xQs18VnWSC4s6MLL"
     },
     {
       "name": "bob received ROD at his payout address",
       "ok": true,
-      "detail": "9999948100 sats at RHEEYDhg7aBnAQR75mj55Tz4SpqwhW6JtY"
+      "detail": "9999948100 sats at RY5RvhUpNRTtaZpoXZkcs7ZoSoxBkg6kN5"
     },
     {
       "name": "LTC multisig fully swept",
@@ -200,50 +200,51 @@
   ],
   "rodBroadcasts": [
     {
-      "txid": "eed32a306c97933df34576393eed460c46eed1421e6da93fb524a82fe765e4a1",
-      "hex": "0100000001be0c27d28ad1f4806a49eed9fa5159ad70d553fc2c39597cd6c9bcfa7133ec4a000000006b483045022100faaa74d8a730d61a2f86446a28dd91637bce447cacd9ecab766fb07f7b687cb602206900083e6423a65492306a354cbf6a0cb928600a63ac0570f09d0f8e241f480601210279e502870ec497e5027b46276a302c016a59ee395e257b99d59188fe3da7e5d8ffffffff0200e40b540200000017a91439b0c46bb436fda0c28c90dc11d0b9016843591b874421e13c2c0000001976a9149cc0f5cb469299b6465a959ad414ec23225d5f2788ac00000000",
+      "txid": "b649be49cf699ca0d483a4f039d3b73fed45b026646086f3df0bc6363bbc5a4a",
+      "hex": "01000000011233fad2e998cc3e0f26a5a64820ac1eebf4dfdf814821a310250aa0ea379644000000006b48304502210086ec3abff89bcb8c607bf65eeda727c765425f28451dfa78a1354c669fc9b12b022018637cec58a9edb59f5644005f41d475f33c831ec37db3c7a1df5b59f45ba05d012103d120b86e77c8dbb1c21e1610ee5d77a87b407efe6ae16a16bfe5e9bbc6ffa396ffffffff0200e40b540200000017a914495bdca4cb3c631057b4db93bb130c4828cf928b874421e13c2c0000001976a9142f9466b361e7a4b552768c482faee10e7d9ff71688ac00000000",
       "valid": true,
       "details": [
-        "input 0: P2PKH signature valid (pubkey 0279e502870ec497…)",
+        "input 0: P2PKH signature valid (pubkey 03d120b86e77c8db…)",
         "fee 51900 sats over 224 bytes (231.70 sat/B)"
       ]
     },
     {
-      "txid": "40334575e353f6fbe82b91aa04ed833d9afb3d6529da43d8dbef8574b61f6dca",
-      "hex": "0100000001a1e465e72fa824b53fa96d1e42d1ee460c46ed3e397645f33d93976c302ad3ee00000000da0047304402201e6f22e39c270092645db899e66f1428be9f56db3a38d36e3050101100aecade02200d51951040ff2aa5b2c6197ca34667800a12d76659216eb4eaeac8c78302297701483045022100c02f629c8b72ee9945b7904cf7eaf278d6b97b916034ace000ff6c20e92121920220329a19309ae95601eb99a7afcbc8d3c25e6be84385116a6b406a8e7282885841014752210278aea3bf1032cece506fbdffb5e3b7515b4122655a169137f05fef1993d856d62103742fabc129f00851598584a95181bcf653025037177b01f5ef48db1364645b2f52aeffffffff0144190b54020000001976a9145731cfee61562d1941c4c8a5774b3ea41372ab8e88ac00000000",
+      "txid": "1a329bd836aa8109c691ab1d7f1fc301af3ce251691824683a5b7b30788844d5",
+      "hex": "01000000014a5abc3b36c60bdff386606426b045ed3fb7d339f0a483d4a09c69cf49be49b600000000db00483045022100ed742b32884cfc0843677b02cef28d144754a9212eac0fdee93938bc2a89be3802201dc07ca65e1d521d712865ed6d4c00e982411d941d516e85a44a01250ef2ce5501483045022100962fff6954d91388af99b0b66e6f12ae68c57c44bb5ea5ba28df191fae3dde300220769cb15ca5f9490f6e2f9fa31a3d5edc939c6622aa4b1b19c12e6f86c708104b01475221032e8cfdf76ce842f31038ae07df36d2f3075a842da45e26e83158ee87b543f9b8210395f5af0527f0fe5b941884a0f8074effb47a524f6b111e4d0a8f6d123e11565952aeffffffff0144190b54020000001976a914fa117610da46100df40a40f983fabd39b6229b5688ac00000000",
       "valid": true,
       "details": [
         "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)",
-        "fee 51900 sats over 303 bytes (171.29 sat/B)"
+        "fee 51900 sats over 304 bytes (170.72 sat/B)"
       ]
     }
   ],
   "altBroadcasts": [
     {
-      "txid": "b9fefa996a3f1da20966107102635c055a8097516bb3a4c70a5527c0a29460f7",
-      "hex": "0100000001237e4501b1dc05fa11013244048674076e1f3256818e32ecf9983ad6184b9ab6000000006a4730440220288d8b857d91899d8d5905729998178e9b9a485793594debbc15298eacb9cf8102203c39cf9d993e2689246e289a800a8f1e08095f845c04b4fd7630d8eafcad1612012103071388fd0fc2e6024e3191b2243739116727361218a54e4d3d2fc01bf28e7c57ffffffff02404b4c000000000017a91439b0c46bb436fda0c28c90dc11d0b9016843591b87d8dde400000000001976a9145731cfee61562d1941c4c8a5774b3ea41372ab8e88ac00000000",
+      "txid": "3d754fae5304439c87089fed64d6482bdbedcf4dc89162469ad5d4366fcd8ef6",
+      "hex": "0100000001771cd58a0cb4bce0834c3cfa4b656f0250da72f803f8e1ac30bbd2ef3f395d76000000006a47304402201880302d8a21305599af99a0f1e56d8ab30f5744500948c577f2dd8a5f74a5f102207616d0e0ad43665af3a1c56097f21f95fb5621271fb9121e634af7a354096dc20121027f6d14a5e13f8123b78623723382389aea44a871d30f2b61c881823d645d29e8ffffffff02404b4c000000000017a914495bdca4cb3c631057b4db93bb130c4828cf928b87d8dde400000000001976a914fa117610da46100df40a40f983fabd39b6229b5688ac00000000",
       "valid": true,
       "details": [
-        "input 0: P2PKH signature valid (pubkey 03071388fd0fc2e6…)",
+        "input 0: P2PKH signature valid (pubkey 027f6d14a5e13f81…)",
         "fee 1000 sats over 223 bytes (4.48 sat/B)"
       ]
     },
     {
-      "txid": "e8481b5cfcef9f767bb56366ce26e06125afc2d57dca1bf4ff81d7fadf9690be",
-      "hex": "0100000001f76094a2c027550ac7a4b36b5197805a055c630271106609a21d3f6a99fafeb900000000d90047304402200dedff7905ed4da25ddb868475fa46411a37fc46965ea3c0a8a653ce65ed5c12022010ddca3a787dd283ffe996a2d5f2185b020d1b3089edec34bfb14c34259ed01f0147304402204645da8f4f2dab6a83f822643d8cab2f421f225ddce6d288f74125e2c206d34b0220534abecd1f2cd611b609f6c21855e6f7d60e2c8f585c477028560402b7a98c15014752210278aea3bf1032cece506fbdffb5e3b7515b4122655a169137f05fef1993d856d62103742fabc129f00851598584a95181bcf653025037177b01f5ef48db1364645b2f52aeffffffff0158474c00000000001976a9149cc0f5cb469299b6465a959ad414ec23225d5f2788ac00000000",
+      "txid": "f67cbcef50b49f946f8189fe3472f1f5cd45c392f66ade2ec10fa794dc80d458",
+      "hex": "0100000001f68ecd6f36d4d59a466291c84dcfeddb2b48d664ed9f08879c430453ae4f753d00000000da00483045022100bb5737cef604be8dc376e367cb0636dd54e4a372a47cc7784bb36a93b2513f0602202b07e730e5b66bf91c0c88a9a143d855c61a5c507e439ed25e9d3271629d9b8e014730440220049264c59f2ebb61f68c539c23cb24309932e44a1fa1fea4aeec2a9352d29e7e0220772e5787eca8bc7dc3b03b175945b0f43438e324f6cd26ba03fffec77ce2716a01475221032e8cfdf76ce842f31038ae07df36d2f3075a842da45e26e83158ee87b543f9b8210395f5af0527f0fe5b941884a0f8074effb47a524f6b111e4d0a8f6d123e11565952aeffffffff0158474c00000000001976a9142f9466b361e7a4b552768c482faee10e7d9ff71688ac00000000",
       "valid": true,
       "details": [
         "input 0: P2SH 2-of-2 CHECKMULTISIG valid (2 sigs verified in order)",
-        "fee 1000 sats over 302 bytes (3.31 sat/B)"
+        "fee 1000 sats over 303 bytes (3.30 sat/B)"
       ]
     }
   ],
   "browserIssues": [],
+  "expectedReloadAborts": [],
   "relayDiagnostics": {
-    "total": 32,
+    "total": 33,
     "byType": {
       "swap_terms": 1,
-      "swap_adaptor_point": 9,
+      "swap_adaptor_point": 10,
       "swap_ready": 2,
       "swap_accept": 2,
       "swap_alt_funding_planned": 1,
@@ -261,8 +262,8 @@
       "swap_complete": 1
     },
     "byPubkey": {
-      "79e502870ec497e5027b46276a302c016a59ee395e257b99d59188fe3da7e5d8": 20,
-      "071388fd0fc2e6024e3191b2243739116727361218a54e4d3d2fc01bf28e7c57": 12
+      "d120b86e77c8dbb1c21e1610ee5d77a87b407efe6ae16a16bfe5e9bbc6ffa396": 21,
+      "7f6d14a5e13f8123b78623723382389aea44a871d30f2b61c881823d645d29e8": 12
     }
   },
   "relayEventTypes": [
@@ -272,6 +273,7 @@
     "swap_ready",
     "swap_accept",
     "swap_accept",
+    "swap_adaptor_point",
     "swap_adaptor_point",
     "swap_alt_funding_planned",
     "swap_rod_funding_planned",

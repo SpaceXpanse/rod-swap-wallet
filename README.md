@@ -26,7 +26,7 @@ The current shipped release is [`2.9.0-beta.1`](CHANGELOG.md).
 
 [`rod-web-swap`](README.md) is a static, browser-based, non-custodial SpaceXpanse ROD wallet with an integrated OTC swap engine. It settles **ROD ↔ LTC** and **ROD ↔ DOGE** atomic swaps; the counter chain is chosen per swap and is cryptographically bound into the negotiated terms. Key generation and signing remain inside the browser, while selected chain operations use the SpaceXpanse ROD API and OTC coordination uses the ROD blockchain, Nostr relay messaging, and browser-native adaptor-signature logic.
 
-The OTC subsystem is implemented directly in the main wallet shell through [`js/otc-app-ui.js`](js/otc-app-ui.js), [`js/otc-engine.js`](js/otc-engine.js), [`js/otc-nostr.js`](js/otc-nostr.js), and [`js/otc-swap.js`](js/otc-swap.js). The current runtime includes planned funding txids, pre-signed timelocked refunds, `PREPARED` settlement gating, automated refund monitoring, and persistent in-browser swap recovery, as tracked in [`CHANGELOG.md`](CHANGELOG.md).
+The OTC subsystem is implemented directly in the main wallet shell through [`js/otc-app-ui.js`](js/otc-app-ui.js), [`js/otc-engine.js`](js/otc-engine.js), [`js/otc-nostr.js`](js/otc-nostr.js), and [`js/otc-swap.js`](js/otc-swap.js). The current runtime includes planned funding txids, pre-signed timelocked refunds, `PREPARED` settlement gating, automated refund monitoring, and persistent in-browser swap recovery, including portable recovery exports that restore live sessions and signed transactions without exporting wallet WIFs or local RPC credentials, as tracked in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What is implemented
 
@@ -52,6 +52,7 @@ The OTC subsystem is implemented directly in the main wallet shell through [`js/
 - Confirmation-gated settlement progression
 - Automated refund monitoring and refund terminal states
 - Reload-resilient in-browser swap persistence
+- Recovery export/import for live OTC sessions, signed refund transactions, portable settings, and history without wallet-secret or RPC-credential leakage
 - End-to-end browser proof harness coverage in [`tests/README.md`](tests/README.md) and [`tests/harness/README.md`](tests/harness/README.md)
 
 ## Architecture at a glance
@@ -163,6 +164,17 @@ Default wallet runtime assumptions:
 2. Configure ROD/LTC API endpoints if your environment differs from the defaults
 3. If you want name operations or on-chain orderbook publication through local ROD Core RPC, run the helper described in [`tools/README.md`](tools/README.md)
 
+### OTC recovery backups
+
+The OTC Settings panel can now export a recoverable backup that includes live
+swap sessions, signed transaction blobs, relay/API preferences, and trade
+history. It intentionally excludes wallet WIF material, raw adaptor/Nostr
+secrets, and machine-local ROD Core RPC credentials.
+
+To resume an active imported swap, reopen the same wallet that originally
+created that swap. Recovery import is additive: it refuses to overwrite an
+already-live local session with the same swap id.
+
 For the optional helper flow, use [`tools/rod-rpc-cors-proxy.exe`](tools/rod-rpc-cors-proxy.exe) as documented in [`tools/README.md`](tools/README.md).
 
 ## Verification and proofs
@@ -191,6 +203,8 @@ The strongest current OTC verification path is the real-browser harness document
 - [`tests/harness/README.md`](tests/harness/README.md)
 
 That harness runs the real app in two browser contexts against mock ROD/LTC backends and a local Nostr relay, and validates broadcast transactions independently.
+
+The fast browser shell gate in [`tests/harness/unit-browser-test.js`](tests/harness/unit-browser-test.js) also covers OTC recovery-button wiring against the real live-session store. The full two-peer settlement runner tolerates only one deliberate reload-time request abort: the transient local ROD `/info` health probe that navigation cancels during the reload scenario.
 
 ### Release inventory
 

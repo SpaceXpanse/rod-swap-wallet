@@ -252,6 +252,7 @@ $(function () {
 		'</div></div>',
 		'<div class="col-md-6"><div class="otc-panel">',
 		'<h4>Backup / restore</h4>',
+		'<p class="text-muted" style="font-size:11px">Recovery backups contain active swap state and signed transactions, but never your wallet WIF or local RPC credentials. To resume signing or settlement, reopen the same wallet that created the swap.</p>',
 		'<button class="btn btn-default btn-xs" id="cfgExport">Export</button> <button class="btn btn-default btn-xs" id="cfgImport">Import</button>',
 		'<textarea id="cfgBackup" class="form-control otc-textarea" style="margin-top:6px"></textarea>',
 		'</div></div></div>',
@@ -3037,6 +3038,13 @@ $(function () {
 		return '';
 	}
 
+	/* Recovery automation must never sign or fund under whichever unrelated
+	   wallet happens to be open. A fully restored session becomes active only
+	   when its role-bound swap xpub matches the currently open wallet. */
+	function sessionBelongsToOpenWallet(session) {
+		return !!(session && session.terms && localRoleFromTerms(session.terms) === session.role);
+	}
+
 	function createIncomingTermsSession(env, eventObject, freshTips) {
 		var p = env.payload || {}, terms = p.terms;
 		if (env.type !== 'swap_terms' || !terms) {
@@ -3490,9 +3498,41 @@ $(function () {
 			$('#cfgTestR').html('<span style="color:#f1334a">Error ✗</span> <span style="font-size:11px;color:#f0ad4e">' + esc(testError.message || String(testError)) + '</span>');
 		}
 	});
-	$('#cfgExport').on('click', function () { $('#cfgBackup').val(STORAGE.exportState()); });
+	$('#cfgExport').on('click', function () {
+		try {
+			$('#cfgBackup').val(ENGINE.exportRecoveryState());
+			flash('success', 'Exported recoverable OTC backup with live sessions, refund transactions, settings, and history.');
+		} catch (e) {
+			flash('danger', e.message || String(e));
+		}
+	});
 	$('#cfgImport').on('click', function () {
-		try { STORAGE.importState($('#cfgBackup').val()); refreshSwaps(); flash('success', 'Imported.'); } catch (e) { flash('danger', e.message); }
+		try {
+			var result = ENGINE.importRecoveryState($('#cfgBackup').val());
+			$('#cfgRelays').val((ENGINE.loadConfig().relays || ENGINE.DEFAULT_RELAYS).join('\n'));
+			startNostr(true);
+			resetAutomationBackoff();
+			var awaitingWallet = 0;
+			var activeRestored = 0;
+			for (var ri = 0; ri < result.importedSwapIds.length; ri++) {
+				var importedSwapId = result.importedSwapIds[ri];
+				try { if (ENGINE.trackSwapId) ENGINE.trackSwapId(importedSwapId); } catch (trackError) {}
+				var restored = ENGINE.restoreLive(importedSwapId);
+				if (restored && !isTerminal(restored)) {
+					activeRestored++;
+					if (sessionBelongsToOpenWallet(restored)) autoContinueSwap(restored);
+					else awaitingWallet++;
+				}
+			}
+			refreshSwaps();
+			refreshHistory();
+			flash(awaitingWallet ? 'warning' : 'success',
+				'Imported recoverable OTC backup: ' + result.sessions + ' live session(s) and ' +
+				result.hexBlobs + ' transaction blob(s) restored.' +
+				(awaitingWallet
+					? ' Open the same wallet that created ' + awaitingWallet + ' active swap(s) to resume them.'
+					: (activeRestored ? ' Active swaps resumed.' : ' No active swap required resuming.')));
+		} catch (e) { flash('danger', e.message); }
 	});
 
 	/* ============ INIT ============ */
@@ -3509,7 +3549,7 @@ $(function () {
 			var sessions = ENGINE.loadLive();
 			for (var swapId in sessions) {
 				var restored = ENGINE.restoreLive(swapId);
-				if (restored && !isTerminal(restored)) {
+				if (restored && !isTerminal(restored) && sessionBelongsToOpenWallet(restored)) {
 					try { autoContinueSwap(restored); } catch (e) { log('Resume failed for ' + short(swapId) + ': ' + (e.message || e)); }
 				}
 			}
@@ -3527,7 +3567,7 @@ $(function () {
 		var liveSessions = ENGINE.loadLive();
 		for (var liveSwapId in liveSessions) {
 			var liveSession = ENGINE.restoreLive(liveSwapId);
-			if (liveSession && !isTerminal(liveSession)) {
+			if (liveSession && !isTerminal(liveSession) && sessionBelongsToOpenWallet(liveSession)) {
 				try { autoContinueSwap(liveSession); } catch (tickError) {}
 			}
 		}

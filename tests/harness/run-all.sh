@@ -77,26 +77,28 @@ else
     echo ""
     echo "tests/harness/node_modules is missing; run npm ci in tests/harness"
     record "browser dependency preflight" 1
-  elif [[ "${PLAYWRIGHT_CHROMIUM_ARGS_JSON:-}" == *"--single-process"* ]]; then
-    echo ""
-    echo "PLAYWRIGHT_CHROMIUM_ARGS_JSON contains --single-process."
-    echo "That mode invalidates Alice/Bob isolation and can manufacture protocol deadlocks."
-    record "browser isolation preflight" 1
   else
     run_node "real-browser wiring + offline PWA shell" unit-browser-test.js
 
-    for CHAIN in "${SUPPORTED_SWAP_CHAINS[@]}"; do
-      run_e2e "e2e $CHAIN happy path"       ALT_CHAIN="$CHAIN" SCENARIO=happy
-      run_e2e "e2e $CHAIN ROD-leg refund"   ALT_CHAIN="$CHAIN" SCENARIO=refund
-      run_e2e "e2e $CHAIN alt-leg refund"   ALT_CHAIN="$CHAIN" SCENARIO=altrefund
-      run_e2e "e2e $CHAIN reload recovery"  ALT_CHAIN="$CHAIN" SCENARIO=happy RELOAD_TEST=1
-    done
-
-    if [ "$DOGE_ROD_REFUND_REPEATS" -gt 1 ]; then
-      for ((RUN=2; RUN<=DOGE_ROD_REFUND_REPEATS; RUN++)); do
-        run_e2e "stress DOGE ROD-leg refund $RUN/$DOGE_ROD_REFUND_REPEATS" \
-          ALT_CHAIN=DOGE SCENARIO=refund HARNESS_REPEAT_INDEX="$RUN"
+    if [[ "${PLAYWRIGHT_CHROMIUM_ARGS_JSON:-}" == *"--single-process"* ]]; then
+      echo ""
+      echo "PLAYWRIGHT_CHROMIUM_ARGS_JSON contains --single-process."
+      echo "The single-context browser gate ran, but that mode invalidates Alice/Bob settlement isolation."
+      record "two-peer browser isolation preflight" 1
+    else
+      for CHAIN in "${SUPPORTED_SWAP_CHAINS[@]}"; do
+        run_e2e "e2e $CHAIN happy path"       ALT_CHAIN="$CHAIN" SCENARIO=happy
+        run_e2e "e2e $CHAIN ROD-leg refund"   ALT_CHAIN="$CHAIN" SCENARIO=refund
+        run_e2e "e2e $CHAIN alt-leg refund"   ALT_CHAIN="$CHAIN" SCENARIO=altrefund
+        run_e2e "e2e $CHAIN reload recovery"  ALT_CHAIN="$CHAIN" SCENARIO=happy RELOAD_TEST=1
       done
+
+      if [ "$DOGE_ROD_REFUND_REPEATS" -gt 1 ]; then
+        for ((RUN=2; RUN<=DOGE_ROD_REFUND_REPEATS; RUN++)); do
+          run_e2e "stress DOGE ROD-leg refund $RUN/$DOGE_ROD_REFUND_REPEATS" \
+            ALT_CHAIN=DOGE SCENARIO=refund HARNESS_REPEAT_INDEX="$RUN"
+        done
+      fi
     fi
   fi
 fi

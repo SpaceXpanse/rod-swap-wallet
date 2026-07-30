@@ -9,10 +9,19 @@ const vm = require('vm');
 
 const root = path.resolve(process.env.APP_DIR || path.join(__dirname, '..'));
 const values = new Map();
+let failStorageKey = '';
 const localStorage = {
 	getItem(key) { return values.has(key) ? values.get(key) : null; },
-	setItem(key, value) { values.set(key, String(value)); },
-	removeItem(key) { values.delete(key); }
+	setItem(key, value) {
+		if (failStorageKey && key === failStorageKey) {
+			failStorageKey = '';
+			throw new Error('simulated storage write failure');
+		}
+		values.set(key, String(value));
+	},
+	removeItem(key) { values.delete(key); },
+	key(index) { return Array.from(values.keys())[index] || null; },
+	get length() { return values.size; }
 };
 const context = {
 	console,
@@ -25,6 +34,45 @@ const context = {
 	window: null
 };
 context.window = context;
+function jqueryStub() {
+	return {
+		val() { return ''; },
+		text() { return ''; },
+		trigger() { return this; }
+	};
+}
+jqueryStub.extend = function () {
+		let deep = false;
+		let target;
+		let index = 0;
+		if (typeof arguments[0] === 'boolean') {
+			deep = arguments[0];
+			target = arguments[1] || {};
+			index = 2;
+		} else {
+			target = arguments[0] || {};
+			index = 1;
+		}
+		for (; index < arguments.length; index++) {
+			const source = arguments[index];
+			if (!source) continue;
+			for (const key of Object.keys(source)) {
+				const value = source[key];
+				if (deep && value && typeof value === 'object' && !Array.isArray(value)) {
+					target[key] = jqueryStub.extend(true, target[key] || {}, value);
+				} else if (deep && Array.isArray(value)) {
+					target[key] = value.slice();
+				} else {
+					target[key] = value;
+				}
+			}
+		}
+		return target;
+};
+jqueryStub.isArray = Array.isArray;
+jqueryStub.trim = function (value) { return String(value).trim(); };
+jqueryStub.getJSON = function () { throw new Error('network disabled in security regression'); };
+context.$ = context.jQuery = jqueryStub;
 context.crypto = {
 	getRandomValues(target) {
 		crypto.randomFillSync(target);
@@ -46,7 +94,8 @@ vm.createContext(context);
 	'js/otc-chains.js',
 	'js/otc-storage.js',
 	'js/otc-nostr.js',
-	'js/otc-swap.js'
+	'js/otc-swap.js',
+	'js/otc-engine.js'
 ].forEach((relativePath) => {
 	const source = fs.readFileSync(path.join(root, relativePath), 'utf8');
 	vm.runInContext(source, context, { filename: relativePath });
@@ -56,12 +105,25 @@ const NOSTR = context.rodOtc.nostr;
 const SWAP = context.rodOtc.swap;
 const CHAINS = context.rodOtc.chains;
 const ADAPTOR = context.rodOtc.adaptor;
+const ENGINE = context.rodOtc.engine;
 
 function expectThrow(fn, pattern, label) {
 	let thrown = null;
 	try { fn(); } catch (error) { thrown = error; }
 	assert(thrown, label + ': expected an exception');
 	assert(pattern.test(String(thrown.message || thrown)), label + ': unexpected error "' + thrown + '"');
+}
+
+function stableStringify(value) {
+	if (value === null || typeof value !== 'object') return JSON.stringify(value);
+	if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+	return '{' + Object.keys(value).sort().map((key) =>
+		JSON.stringify(key) + ':' + stableStringify(value[key])
+	).join(',') + '}';
+}
+
+function recoveryChecksum(payload) {
+	return crypto.createHash('sha256').update(Buffer.from(stableStringify(payload), 'utf8')).digest('hex');
 }
 
 function signedFixture(privateKeyHex, type) {
@@ -343,6 +405,105 @@ function testBilateralTermsReconstruction() {
 		'legitimate sender and receiver must reconstruct the same canonical terms hash');
 }
 
+function testRecoveryExportImportRestoresLiveSwap() {
+	values.clear();
+	const swapId = 'recoverable-security-swap';
+	const session = {
+		swapId,
+		role: 'seller',
+		state: 'PREPARED',
+		terms: { termsHash: 'terms-hash', altChain: 'DOGE' },
+		rodRefund: { signedHex: 'aa'.repeat(120), localSig: 'bb' },
+		altRefund: { signedHex: 'cc'.repeat(120), localSig: 'dd' },
+		localChildPrivateKey: 'raw-private-key-must-not-export',
+		adaptorSecret: 'raw-adaptor-secret-must-not-export',
+		localNostrPrivateKey: 'raw-nostr-secret-must-not-export',
+		_ep: 'sealed-child-key',
+		_ea: 'sealed-adaptor-secret',
+		_en: 'sealed-nostr-key'
+	};
+	ENGINE.saveConfig({
+		relays: ['wss://relay.example'],
+		rodApiUrl: 'https://api.example.invalid',
+		rpcUrl: 'http://user:pass@127.0.0.1:18080/wallet/ROD',
+		rpcPort: '18080',
+		rpcUser: 'user',
+		rpcPass: 'pass',
+		rpcWallet: 'ROD'
+	});
+	ENGINE.saveLive(session);
+	ENGINE.recordTrade(Object.assign({}, session, {
+		orderId: 'recoverable-order',
+		terms: Object.assign({}, session.terms, { rodAmount: '1.00000000', altAmount: '2.00000000' }),
+		execution: { rodFunding: { txid: 'rod-funding' }, altFunding: { txid: 'alt-funding' } }
+	}));
+
+	const exported = ENGINE.exportRecoveryState();
+	assert(!exported.includes('raw-private-key-must-not-export'), 'recovery export must not contain raw child private key');
+	assert(!exported.includes('raw-adaptor-secret-must-not-export'), 'recovery export must not contain raw adaptor secret');
+	assert(!exported.includes('raw-nostr-secret-must-not-export'), 'recovery export must not contain raw Nostr secret');
+	assert(!exported.includes('user:pass'), 'recovery export must not contain RPC URL credentials');
+	assert(!exported.includes('"rpcUser"'), 'recovery export must not contain RPC username');
+	assert(!exported.includes('"rpcPass"'), 'recovery export must not contain RPC password');
+	assert(exported.includes('rodOtcHex_' + swapId + '_rodRefund_signedHex'), 'recovery export must include offloaded ROD refund hex');
+	assert(exported.includes('rodOtcHex_' + swapId + '_altRefund_signedHex'), 'recovery export must include offloaded alt refund hex');
+
+	values.clear();
+	ENGINE.saveConfig({ rpcUrl: 'http://127.0.0.1:19090', rpcUser: 'local-user', rpcPass: 'local-pass' });
+	const result = ENGINE.importRecoveryState(exported);
+	const restored = ENGINE.restoreLive(swapId);
+	assert.strictEqual(result.sessions, 1, 'one live session must be restored');
+	assert.strictEqual(result.hexBlobs, 2, 'only two valid recovery blobs must be reported as restored');
+	assert.strictEqual(JSON.stringify(result.importedSwapIds), JSON.stringify([swapId]),
+		'import must report the exact restored swap IDs');
+	assert(restored, 'imported live session must be visible to restoreLive');
+	assert.strictEqual(restored.role, 'seller');
+	assert.strictEqual(restored.state, 'PREPARED');
+	assert.strictEqual(restored.rodRefund.signedHex, 'aa'.repeat(120), 'ROD refund hex must be restored from blob storage');
+	assert.strictEqual(restored.altRefund.signedHex, 'cc'.repeat(120), 'alt refund hex must be restored from blob storage');
+	assert.strictEqual(ENGINE.loadConfig().rodApiUrl, 'https://api.example.invalid', 'recovery import must restore settings');
+	assert.strictEqual(ENGINE.loadConfig().rpcUrl, 'http://127.0.0.1:19090', 'recovery import must preserve machine-local RPC URL');
+	assert.strictEqual(ENGINE.loadConfig().rpcUser, 'local-user', 'recovery import must preserve machine-local RPC username');
+	assert.strictEqual(ENGINE.loadConfig().rpcPass, 'local-pass', 'recovery import must preserve machine-local RPC password');
+	assert.strictEqual(ENGINE.getHistory().length, 1, 'recovery import must restore trade history');
+
+	const tampered = JSON.parse(exported);
+	tampered.payload.live[swapId].state = 'COMPLETE';
+	expectThrow(() => ENGINE.importRecoveryState(JSON.stringify(tampered)), /checksum/i, 'tampered recovery backup');
+
+	expectThrow(() => ENGINE.importRecoveryState(exported), /overwrite existing swap/i,
+		'import must refuse to overwrite an existing live session');
+	assert.strictEqual(ENGINE.restoreLive(swapId).state, 'PREPARED',
+		'conflict rejection must preserve the existing session');
+
+	const malformedBlob = JSON.parse(exported);
+	malformedBlob.payload.hexBlobs['rodOtcHex_' + swapId + '_unexpected_signedHex'] = 'aa';
+	malformedBlob.checksum = recoveryChecksum(malformedBlob.payload);
+	values.clear();
+	expectThrow(() => ENGINE.importRecoveryState(JSON.stringify(malformedBlob)), /invalid recovery blob/i,
+		'import must reject unexpected recovery blob keys');
+	assert.strictEqual(values.size, 0, 'invalid recovery blobs must be rejected before storage is changed');
+
+	/* A quota/write failure after the live-map write must roll the complete
+	   recovery namespace back to its previous state. */
+	values.clear();
+	const existing = {
+		swapId: 'existing-swap',
+		role: 'buyer',
+		state: 'OPEN',
+		terms: { termsHash: 'existing-terms', altChain: 'LTC' }
+	};
+	ENGINE.saveLive(existing);
+	const existingBefore = localStorage.getItem('rodOtcLive');
+	failStorageKey = 'rodOtcHex_' + swapId + '_rodRefund_signedHex';
+	expectThrow(() => ENGINE.importRecoveryState(exported), /existing local state was restored/i,
+		'failed import must report successful rollback');
+	assert.strictEqual(localStorage.getItem('rodOtcLive'), existingBefore,
+		'failed import must restore the prior live-session map');
+	assert.strictEqual(localStorage.getItem('rodOtcHex_' + swapId + '_rodRefund_signedHex'), null,
+		'failed import must remove partially written recovery blobs');
+}
+
 const tests = [
 	['Nostr signatures', testNostrSignatures],
 	['Nostr order-event authentication', testOrderEventAuthentication],
@@ -351,7 +512,8 @@ const tests = [
 	['refund ordering for LTC and DOGE', testRefundOrdering],
 	['runtime security boundary wiring', testRuntimeBoundaryWiring],
 	['preserved protocol and DOGE vectors', testPreservedProtocolBehavior],
-	['bilateral canonical terms reconstruction', testBilateralTermsReconstruction]
+	['bilateral canonical terms reconstruction', testBilateralTermsReconstruction],
+	['recovery export/import restores live swap state', testRecoveryExportImportRestoresLiveSwap]
 ];
 
 let passed = 0;

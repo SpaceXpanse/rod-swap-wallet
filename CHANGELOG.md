@@ -9,12 +9,18 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
 
 ## [Unreleased]
 
+## [2.9.1-beta.1] - 2026-07-30
+
+### Documentation
+- Added the proof-artifact guide in [`proof/README.md`](proof/README.md), covering the generated OTC evidence package, report structure, and the relationship between screenshots and [`proof/proofreport.html`](proof/proofreport.html).
+
 ### Added
 - OTC recovery exports now include live sessions, signed refund blobs, portable settings, and history through [`engine.exportRecoveryState()`](js/otc-engine.js:1557) and [`engine.importRecoveryState()`](js/otc-engine.js:1572), while intentionally excluding wallet WIF material, raw local secrets, and machine-local RPC credentials.
 
 ### Changed
 - OTC import/resume behavior now restarts automation only for swaps whose role-bound swap xpub matches the currently opened wallet, enforced in [`sessionBelongsToOpenWallet()`](js/otc-app-ui.js:3044) and the OTC startup/import resume loops in [`js/otc-app-ui.js`](js/otc-app-ui.js).
 - The browser proof harness now splits single-context shell/PWA checks from two-peer settlement isolation more explicitly: [`tests/harness/unit-browser-test.js`](tests/harness/unit-browser-test.js) can run with `--single-process`, while [`tests/harness/e2e-swap-test.js`](tests/harness/e2e-swap-test.js) and [`tests/harness/run-all.sh`](tests/harness/run-all.sh) still reject it for Alice/Bob settlement evidence.
+- Finalized release metadata for `2.9.1-beta.1`: [`README.md`](README.md), [`index.html`](index.html), [`manifest.webmanifest`](manifest.webmanifest), and [`sw.js`](sw.js) now carry the shipped patch identity, with [`SHA256SUMS`](SHA256SUMS) refreshed as the release inventory.
 
 ### Fixed
 - Reload recovery proofing now treats only the deliberate local ROD `/info` request abort as expected during navigation in [`tests/harness/e2e-swap-test.js`](tests/harness/e2e-swap-test.js), preventing intentional reload noise from being misclassified as a browser regression while keeping every other failed request fatal.

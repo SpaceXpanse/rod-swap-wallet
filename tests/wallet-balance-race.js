@@ -125,7 +125,7 @@ function testDgbRoutingAndCsp() {
 		'wallet API settings must migrate the old shipped DGB default');
 	assert(/savedDgb\.apiUrl\s*===\s*'https:\/\/api\.blockchair\.com\/digibyte'/.test(engineSource),
 		'OTC engine settings must migrate the old shipped DGB default');
-	assert(/STATIC_CACHE_VERSION\s*=\s*"[^"]*2\.9\.0-beta\.1/.test(serviceWorker),
+	assert(/STATIC_CACHE_VERSION\s*=\s*"[^"]*2\.9\.1-beta\.1/.test(serviceWorker),
 		'service-worker cache must carry the current release identity');
 }
 

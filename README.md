@@ -7,7 +7,7 @@ Static browser-based SpaceXpanse ROD wallet with an integrated experimental OTC 
 
 ## Status
 
-The current shipped release is [`2.9.0-beta.1`](CHANGELOG.md).
+The current shipped release is [`2.9.1-beta.1`](CHANGELOG.md).
 
 ## Experimental disclaimer
 

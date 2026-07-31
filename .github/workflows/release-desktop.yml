@@ -144,14 +144,28 @@ jobs:
           echo "prerelease_flag=$prerelease_flag" >> "$GITHUB_OUTPUT"
           echo "draft_flag=$draft_flag" >> "$GITHUB_OUTPUT"
 
+      - name: Collect release asset files
+        id: release_assets
+        shell: bash
+        run: |
+          mapfile -d '' asset_files < <(find release-artifacts -type f -print0)
+          asset_files+=("SHA256SUMS")
+
+          {
+            echo "asset_files<<EOF"
+            printf '%s\n' "${asset_files[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub release
         shell: bash
         run: |
+          mapfile -t asset_files <<'EOF'
+          ${{ steps.release_assets.outputs.asset_files }}
+          EOF
+
           gh release create "$RELEASE_TAG" \
-            release-artifacts/release-electron-windows/* \
-            release-artifacts/release-electron-linux/* \
-            release-artifacts/release-electron-macos/* \
-            SHA256SUMS \
+            "${asset_files[@]}" \
             --title "$RELEASE_TAG" \
             --generate-notes \
             ${{ steps.release_flags.outputs.draft_flag }} \

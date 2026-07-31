@@ -61,7 +61,7 @@ $(function () {
 	/* ============ HTML ============ */
 	$root.html([
 		'<h2 id="otcTitle">ROD ↔ <span id="otcTitleAlt">' + esc(altChainCodes()[0] || 'LTC') + '</span> OTC Swap</h2>',
-		'<div class="otc-rod-warn"><span class="glyphicon glyphicon-info-sign"></span> OTC swaps use <b>ROD</b> for on-chain operations (order publishing, name registration, and settlement transactions). Ensure your ROD RPC wallet has sufficient balance to cover transaction fees.</div>',
+		'<div class="otc-rod-warn"><span class="glyphicon glyphicon-info-sign"></span> OTC swaps use <b>ROD</b> for on-chain operations (order publishing, name registration, and settlement transactions). This feature is still <b>highly experimental</b> and should <b>not</b> be used to swap serious amounts. Ensure your ROD RPC wallet has sufficient balance to cover transaction fees.</div>',
 		'<div id="otcWarn" class="alert alert-warning" style="display:none"><b>Wallet not loaded.</b> Open your wallet in the <a href="#" onclick="$(\'a[href=#wallet]\').tab(\'show\');return false">Wallet tab</a> first. Your wallet key is used for swap authentication and signing.</div>',
 		'<div id="otcWalletOk" class="alert alert-success" style="display:none"></div>',
 		'<div id="otcFlash" class="alert hidden"></div>',

@@ -29,8 +29,9 @@ function copyProject() {
 
 function replaceOnce(file, before, after) {
 	const source = fs.readFileSync(file, 'utf8');
-	assert(source.includes(before), 'mutation target not found in ' + file + ': ' + before);
-	fs.writeFileSync(file, source.replace(before, after));
+	const normalizedSource = source.replace(/\r\n/g, '\n');
+	assert(normalizedSource.includes(before), 'mutation target not found in ' + file + ': ' + before);
+	fs.writeFileSync(file, normalizedSource.replace(before, after));
 }
 
 function runTest(script, appDir) {
@@ -51,8 +52,8 @@ const mutants = [
 		mutate(appDir) {
 			replaceOnce(
 				path.join(appDir, 'js', 'otc-nostr.js'),
-				"if(!eventObject.sig || !schnorrVerify(eventObject.id, eventObject.pubkey, eventObject.sig)){\n\t\t\tthrow new Error('OTC Nostr event signature mismatch');",
-				"if(eventObject.sig && !schnorrVerify(eventObject.id, eventObject.pubkey, eventObject.sig)){\n\t\t\tthrow new Error('OTC Nostr event signature mismatch');"
+				"if(!eventObject.sig || !schnorrVerify(eventObject.id, eventObject.pubkey, eventObject.sig)){\n\t\t\tthrow new Error('OTC Nostr event signature mismatch');\n\t\t}",
+				"if(eventObject.sig && !schnorrVerify(eventObject.id, eventObject.pubkey, eventObject.sig)){\n\t\t\tthrow new Error('OTC Nostr event signature mismatch');\n\t\t}"
 			);
 		}
 	},

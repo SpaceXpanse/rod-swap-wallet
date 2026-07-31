@@ -1,13 +1,16 @@
 name: Electron desktop build
 
 on:
-  workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+  workflow_run:
+    workflows:
+      - Wallet proof harness
+    types:
+      - completed
+    branches:
+      - "**"
 
 concurrency:
-  group: electron-build-${{ github.workflow }}-${{ github.ref }}
+  group: electron-build-${{ github.event.workflow_run.head_branch }}-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: true
 
 permissions:
@@ -18,6 +21,7 @@ env:
 
 jobs:
   build:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     name: ${{ matrix.name }} desktop artifact
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 45
@@ -42,6 +46,8 @@ jobs:
         working-directory: electron
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: actions/setup-node@v4
         with:

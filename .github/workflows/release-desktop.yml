@@ -1,21 +1,16 @@
 name: Release desktop artifacts
 
 on:
-  push:
-    tags:
-      - "v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing v* tag to release
-        required: true
-      draft:
-        description: Create the release as a draft
-        required: false
-        default: "true"
+  workflow_run:
+    workflows:
+      - Electron desktop build
+    types:
+      - completed
+    branches:
+      - "**"
 
 concurrency:
-  group: release-desktop-${{ github.ref_name || inputs.tag }}
+  group: release-desktop-${{ github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -23,6 +18,7 @@ env:
 
 jobs:
   verify:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     name: Verify release gates and checksums
     runs-on: ubuntu-latest
     permissions:
@@ -31,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -46,6 +42,7 @@ jobs:
           git diff --exit-code -- SHA256SUMS
 
   build:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     name: Build ${{ matrix.name }} desktop artifact
     needs: verify
     runs-on: ${{ matrix.runs_on }}
@@ -74,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -107,6 +104,7 @@ jobs:
           retention-days: 7
 
   publish:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     name: Publish desktop release
     needs:
       - verify
@@ -117,12 +115,12 @@ jobs:
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-      RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || 'true' }}
+      RELEASE_TAG: desktop-${{ github.event.workflow_run.head_branch }}-${{ github.event.workflow_run.head_sha }}
+      RELEASE_DRAFT: "true"
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Download desktop artifacts
         uses: actions/download-artifact@v4

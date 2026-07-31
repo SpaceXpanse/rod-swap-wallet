@@ -14,6 +14,7 @@ const releaseInventoryDirectories = new Set(['css', 'fonts', 'images', 'js', 'to
 function normalizeHashContent(relativePath) {
 	const data = fs.readFileSync(path.join(root, relativePath));
 	if (/\.(?:bat|css|html|js|json|md|svg|txt|webmanifest|ya?ml)$/i.test(relativePath) ||
+		relativePath === '.gitignore' ||
 		!relativePath.includes('.')) {
 		return Buffer.from(data.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
 	}

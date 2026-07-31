@@ -47,11 +47,13 @@ jobs:
           cache: npm
           cache-dependency-path: tests/harness/package-lock.json
 
-      # Cache Playwright browser artifacts
+      # Cache Playwright browser artifacts at the same default path used by the
+      # harness runtime. Do not redirect PLAYWRIGHT_BROWSERS_PATH only during
+      # install, because the tests later launch from ~/.cache/ms-playwright.
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/ms-playwright
+          path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-browsers-${{ hashFiles('tests/harness/package-lock.json') }}
           restore-keys: ${{ runner.os }}-playwright-browsers-
 
@@ -61,11 +63,7 @@ jobs:
 
       - name: Install Chromium and system dependencies
         working-directory: tests/harness
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
         run: |
-          # ensure cache dir exists and is writable
-          mkdir -p "${{ runner.temp }}/ms-playwright"
           sudo apt-get update
           sudo apt-get install -y \
             libnss3 \

@@ -115,7 +115,8 @@ jobs:
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: desktop-${{ github.event.workflow_run.head_branch }}-${{ github.event.workflow_run.head_sha }}
+      RELEASE_TAG: desktop-${{ github.event.workflow_run.head_sha }}
+      RELEASE_TARGET: ${{ github.event.workflow_run.head_sha }}
       RELEASE_DRAFT: "true"
     steps:
       - uses: actions/checkout@v4
@@ -145,32 +146,43 @@ jobs:
           echo "draft_flag=$draft_flag" >> "$GITHUB_OUTPUT"
 
       - name: Collect release asset files
-        id: release_assets
         shell: bash
         run: |
-          mapfile -d '' asset_files < <(find \
+          find \
             release-artifacts/release-electron-windows \
             release-artifacts/release-electron-linux \
             release-artifacts/release-electron-macos \
-            -maxdepth 1 -type f -print0)
-          asset_files+=("SHA256SUMS")
+            -maxdepth 1 -type f \
+            \( \
+              -name '*.exe' -o \
+              -name '*.AppImage' -o \
+              -name '*.deb' -o \
+              -name '*.dmg' -o \
+              -name '*.zip' \
+            \) \
+            | sort > release-assets.txt
+          printf '%s\n' "SHA256SUMS" >> release-assets.txt
 
-          {
-            echo "asset_files<<EOF"
-            printf '%s\n' "${asset_files[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          if [ "$(wc -l < release-assets.txt)" -le 1 ]; then
+            echo "No desktop package files were found for release upload." >&2
+            exit 1
+          fi
 
-      - name: Create GitHub release
+          cat release-assets.txt
+
+      - name: Create or update GitHub release
         shell: bash
         run: |
-          mapfile -t asset_files <<'EOF'
-          ${{ steps.release_assets.outputs.asset_files }}
-          EOF
+          mapfile -t asset_files < release-assets.txt
 
-          gh release create "$RELEASE_TAG" \
-            "${asset_files[@]}" \
-            --title "$RELEASE_TAG" \
-            --generate-notes \
-            ${{ steps.release_flags.outputs.draft_flag }} \
-            ${{ steps.release_flags.outputs.prerelease_flag }}
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TAG" \
+              --generate-notes \
+              --latest=false \
+              ${{ steps.release_flags.outputs.draft_flag }} \
+              ${{ steps.release_flags.outputs.prerelease_flag }}
+          fi
+
+          gh release upload "$RELEASE_TAG" "${asset_files[@]}" --clobber

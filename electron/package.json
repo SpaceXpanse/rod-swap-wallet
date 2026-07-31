@@ -24,6 +24,12 @@
     "package:mac": "npm run sync-wallet && electron-builder --mac dmg zip --publish never",
     "package:all": "npm run sync-wallet && electron-builder -mwl --publish never"
   },
+  "overrides": {
+    "@noble/hashes": "1.4.0",
+    "app-builder-lib": {
+      "@noble/hashes": "1.4.0"
+    }
+  },
   "build": {
     "appId": "org.spacexpanse.wallet.rod.webswap",
     "productName": "SpaceXpanse ROD Wallet",

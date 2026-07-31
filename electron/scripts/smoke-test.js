@@ -28,6 +28,16 @@ function createChildEnvironment() {
   return childEnvironment;
 }
 
+function createElectronArguments() {
+  const electronArguments = ['.'];
+
+  if (process.platform === 'linux' && process.env.CI === 'true') {
+    electronArguments.push('--no-sandbox');
+  }
+
+  return electronArguments;
+}
+
 function fail(message) {
   const error = new Error(message);
   error.isSmokeFailure = true;
@@ -89,9 +99,10 @@ async function run() {
   removePreviousResultsFile();
 
   const childEnvironment = createChildEnvironment();
+  const electronArguments = createElectronArguments();
 
   await new Promise((resolve, reject) => {
-    const childProcess = spawn(electronBinaryPath, ['.'], {
+    const childProcess = spawn(electronBinaryPath, electronArguments, {
       cwd: path.join(__dirname, '..'),
       env: childEnvironment,
       stdio: 'inherit',

@@ -158,6 +158,59 @@ Default wallet runtime assumptions:
 - Donation output is disabled by default
 - Script-tag ordering in [`index.html`](index.html) is a compatibility requirement
 
+## Electron desktop wrapper
+
+> [!WARNING]
+> The Electron desktop wrapper under [`electron/`](electron) is still **experimental** and should be treated as **testing-only**, just like the browser wallet itself.
+
+Install wrapper dependencies from [`electron/`](electron):
+
+```bash
+cd electron && npm ci
+```
+
+Run the wrapper locally:
+
+```bash
+cd electron && npm run start:win
+```
+
+On Linux or macOS, use the platform-specific scripts from [`electron/package.json`](electron/package.json):
+
+```bash
+cd electron && npm run start:linux
+cd electron && npm run start:mac
+```
+
+Run the smoke proof:
+
+```bash
+cd electron && npm run test:smoke
+```
+
+The smoke run regenerates [`electron/app/wallet/`](electron/app/wallet), launches the packaged wallet entrypoint, and writes a local proof artifact to [`electron/test-results/electron-smoke-test.json`](electron/test-results/electron-smoke-test.json). That JSON file is intentionally ignored by [`electron/test-results/.gitignore`](electron/test-results/.gitignore) and should be treated as a local validation artifact rather than a committed release file.
+
+Build desktop targets:
+
+```bash
+cd electron && npm run package:dir
+cd electron && npm run package:win
+cd electron && npm run package:linux
+cd electron && npm run package:mac
+```
+
+Repository automation now mirrors that manual workflow through [`.github/workflows/electron-build.yml`](.github/workflows/electron-build.yml) and [`.github/workflows/release-desktop.yml`](.github/workflows/release-desktop.yml). The build workflow runs the native Windows/Ubuntu/macOS Electron matrix, executes [`npm run test:smoke`](electron/package.json), packages unsigned desktop artifacts, and uploads them for inspection without publishing a release. The release workflow first re-proves [`bash tests/run-fast.sh`](tests/run-fast.sh:1) and the current [`SHA256SUMS`](SHA256SUMS), then builds all three native desktop targets and publishes a GitHub Release that attaches the desktop artifacts plus [`SHA256SUMS`](SHA256SUMS). Draft mode remains the default, and alpha/beta/rc tags publish as prereleases.
+
+Current validation status:
+
+- Windows-local wrapper launch was validated with [`npm run start:win`](electron/package.json)
+- Smoke verification passed with [`npm run test:smoke`](electron/package.json)
+- Directory packaging passed with [`npm run package:dir`](electron/package.json)
+- Windows packaging passed with [`npm run package:win`](electron/package.json)
+- Linux/macOS packaging scripts were validated for configuration with [`npm run package:linux`](electron/package.json) `-- --help` and [`npm run package:mac`](electron/package.json) `-- --help`
+
+Windows builds were validated on this host. Linux and macOS targets are configured in [`electron/package.json`](electron/package.json), but final distributables should be produced on native hosts or CI runners for those platforms. Public macOS distribution also requires normal signing and notarization outside this repository.
+
 ## Use OTC mode
 
 1. Open the OTC tab inside [`index.html`](index.html)
@@ -217,6 +270,8 @@ node tests/update-checksums.js
 
 Then rerun the fast gate so the inventory and release wiring are proven together.
 
+For GitHub-hosted desktop releases, [`.github/workflows/release-desktop.yml`](.github/workflows/release-desktop.yml) enforces the same invariant by failing if regenerating [`SHA256SUMS`](SHA256SUMS) would change the committed manifest before publishing release assets.
+
 ### Visual proof artifacts
 
 Screenshots and proof artifacts are available under [`proof/`](proof), including:
@@ -254,6 +309,7 @@ Screenshots and proof artifacts are available under [`proof/`](proof), including
 ├─ tests/
 ├─ tools/
 ├─ docs/
+├─ electron/
 ├─ proof/
 ├─ sw.js
 └─ manifest.webmanifest

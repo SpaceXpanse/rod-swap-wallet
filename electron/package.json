@@ -1,0 +1,114 @@
+{
+  "name": "rod-web-swap-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron wrapper for the static SpaceXpanse ROD wallet",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "SpaceXpanse",
+    "email": "contact@spacexpanse.org"
+  },
+  "homepage": "https://www.spacexpanse.org/",
+  "main": "src/main.js",
+  "scripts": {
+    "sync-wallet": "node scripts/sync-wallet.js",
+    "test:smoke": "npm run sync-wallet && node scripts/smoke-test.js",
+    "start": "npm run start:win",
+    "start:win": "npm run sync-wallet && cmd /d /s /c \"set ELECTRON_RUN_AS_NODE=&& electron .\"",
+    "start:linux": "npm run sync-wallet && ELECTRON_RUN_AS_NODE= electron .",
+    "start:mac": "npm run sync-wallet && ELECTRON_RUN_AS_NODE= electron .",
+    "pack": "npm run sync-wallet && electron-builder --publish never",
+    "package:dir": "npm run sync-wallet && electron-builder --dir --publish never",
+    "package:win": "npm run sync-wallet && electron-builder --win nsis dir --publish never",
+    "package:linux": "npm run sync-wallet && electron-builder --linux AppImage deb --publish never",
+    "package:mac": "npm run sync-wallet && electron-builder --mac dmg zip --publish never",
+    "package:all": "npm run sync-wallet && electron-builder -mwl --publish never"
+  },
+  "build": {
+    "appId": "org.spacexpanse.wallet.rod.webswap",
+    "productName": "SpaceXpanse ROD Wallet",
+    "copyright": "Copyright © 2026 SpaceXpanse",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "app/wallet/**/*",
+      "package.json",
+      "!dist{,/**/*}",
+      "!scripts{,/**/*}",
+      "!node_modules/.cache{,/**/*}"
+    ],
+    "extraMetadata": {
+      "main": "src/main.js"
+    },
+    "asar": true,
+    "fileAssociations": [],
+    "protocols": [],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "linux": {
+      "category": "Utility",
+      "maintainer": "SpaceXpanse <contact@spacexpanse.org>",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  }
+}

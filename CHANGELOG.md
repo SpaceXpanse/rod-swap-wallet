@@ -9,6 +9,30 @@ The format is inspired by Keep a Changelog and follows Semantic Versioning princ
 
 ## [Unreleased]
 
+### Documentation
+- Added concise Electron desktop-wrapper usage and build guidance to [`README.md`](README.md), including dependency install, local launch, smoke verification, target packaging commands, and host-specific packaging caveats for Windows, Linux, and macOS.
+- Refreshed Carbon Memory and maintainer workflow notes for the completed Electron wrapper implementation in [`docs/maintainer-wiki/concept-architecture-overview.md`](docs/maintainer-wiki/concept-architecture-overview.md), [`docs/maintainer-wiki/workflows.md`](docs/maintainer-wiki/workflows.md), and [`.kilocode/rules/memory-bank/`](.kilocode/rules/memory-bank/).
+- Added concise GitHub Actions desktop build/release notes to [`README.md`](README.md), refreshed CI/release workflow guidance in [`docs/maintainer-wiki/workflows.md`](docs/maintainer-wiki/workflows.md), and updated volatile Carbon Memory for the new automation surface.
+
+### Added
+- Experimental Electron desktop-wrapper support under [`electron/`](electron), including the main-process entrypoint, restricted preload bridge, wallet-sync script, smoke test, and packaging configuration for Windows, Linux, and macOS.
+- GitHub Actions desktop automation through [`.github/workflows/electron-build.yml`](.github/workflows/electron-build.yml), [`.github/workflows/release-desktop.yml`](.github/workflows/release-desktop.yml), and the updated [`.github/workflows/proof-harness.yml`](.github/workflows/proof-harness.yml). The new desktop build matrix runs native Windows/Ubuntu/macOS packaging plus [`npm run test:smoke`](electron/package.json), while the release workflow proves [`bash tests/run-fast.sh`](tests/run-fast.sh:1), verifies committed [`SHA256SUMS`](SHA256SUMS), builds desktop artifacts, and publishes them with a GitHub Release. The proof harness keeps CI proof coverage and now exposes low-risk manual [`DOGE_ROD_REFUND_REPEATS`](tests/harness/run-all.sh:14) input for refund stress runs.
+
+### Changed
+- [`tests/release-gate.js`](tests/release-gate.js:47) now skips generated `dist` directories so packaged Chromium license files do not create false-positive release-gate failures.
+- [`.gitignore`](.gitignore:17) now ignores generated Electron wrapper artifacts such as [`electron/app/wallet/`](electron/app/wallet), [`electron/dist/`](electron/dist), and [`electron/node_modules/`](electron/node_modules).
+- [`SHA256SUMS`](SHA256SUMS) was regenerated after the Electron release-inventory changes.
+- [`SHA256SUMS`](SHA256SUMS) was regenerated again after the GitHub Actions documentation and workflow-release inventory updates.
+
+### Verification
+- Electron smoke verification passed via [`npm run test:smoke`](electron/package.json); the local-only proof artifact is [`electron/test-results/electron-smoke-test.json`](electron/test-results/electron-smoke-test.json).
+- Electron packaging validation passed via [`npm run package:dir`](electron/package.json), [`npm run package:win`](electron/package.json), [`npm run package:linux`](electron/package.json) `-- --help`, and [`npm run package:mac`](electron/package.json) `-- --help`.
+- Windows-local wrapper launch passed via [`npm run start:win`](electron/package.json) after clearing `ELECTRON_RUN_AS_NODE`.
+- Root fast gate passed after the release-gate simplification fix: release gate `12/12`, security regression `9/9`, wallet balance race `5/5`, explorer contract `5/5`, mutation gate `7/7`.
+- Workflow YAML parsing succeeded for all files under [`.github/workflows/`](.github/workflows).
+- [`node tests/update-checksums.js`](tests/update-checksums.js:1) succeeded and rewrote [`SHA256SUMS`](SHA256SUMS).
+- [`actionlint`](https://github.com/rhysd/actionlint) was not available on this host, so workflow validation evidence for this pass is limited to YAML parsing plus the repository proof commands.
+
 ## [2.9.1-beta.1] - 2026-07-30
 
 ### Documentation

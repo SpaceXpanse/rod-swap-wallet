@@ -12,10 +12,16 @@ const testRoot = __dirname;
 
 function copyProject() {
 	const target = fs.mkdtempSync(path.join(os.tmpdir(), 'rod-wallet-mutant-'));
+	const skippedPaths = [
+		path.join('tests', 'harness', 'node_modules'),
+		path.join('electron', 'dist')
+	];
 	fs.cpSync(root, target, {
 		recursive: true,
 		filter(source) {
-			return !source.includes(path.join('tests', 'harness', 'node_modules'));
+			return !skippedPaths.some(function(skippedPath) {
+				return source.includes(skippedPath);
+			});
 		}
 	});
 	return target;

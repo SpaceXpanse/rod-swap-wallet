@@ -1,0 +1,74 @@
+name: Electron desktop build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: electron-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 18
+
+jobs:
+  build:
+    name: ${{ matrix.name }} desktop artifact
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            runs_on: windows-latest
+            package_command: npm run package:win
+            artifact_name: electron-dist-windows
+          - name: Linux
+            runs_on: ubuntu-latest
+            package_command: npm run package:linux
+            artifact_name: electron-dist-linux
+          - name: macOS
+            runs_on: macos-latest
+            package_command: npm run package:mac
+            artifact_name: electron-dist-macos
+    defaults:
+      run:
+        working-directory: electron
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install Electron dependencies
+        run: npm ci
+
+      - name: Run Electron smoke test
+        run: npm run test:smoke
+
+      - name: Build unsigned desktop package
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          APPLE_ID: ${{ secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '' }}
+          CSC_LINK: ${{ secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD || '' }}
+        run: ${{ matrix.package_command }}
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: electron/dist/**
+          if-no-files-found: error
+          retention-days: 14

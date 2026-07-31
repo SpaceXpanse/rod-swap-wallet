@@ -44,7 +44,7 @@ function inReleaseInventory(relativePath) {
 function walk(directory, predicate) {
 	const output = [];
 	for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-		if (entry.name === 'node_modules' || entry.name === '.git') continue;
+		if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
 		const absolute = path.join(directory, entry.name);
 		if (entry.isDirectory()) output.push(...walk(absolute, predicate));
 		else if (!predicate || predicate(absolute)) output.push(absolute);

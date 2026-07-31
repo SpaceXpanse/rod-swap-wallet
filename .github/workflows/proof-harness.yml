@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      doge_refund_repeats:
+        description: DOGE refund repeat count for settlement stress coverage (1-20)
+        required: false
+        default: "3"
 
 concurrency:
   group: proof-harness-${{ github.ref }}
@@ -12,16 +17,19 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  NODE_VERSION: 18
+
 jobs:
   fast-gates:
     name: Fast contracts and mutations
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: ${{ env.NODE_VERSION }}
       - name: Run deterministic release gates
         run: chmod +x tests/run-fast.sh && chmod +x tests/harness/run-all.sh && bash tests/run-fast.sh
 
@@ -31,27 +39,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: tests/harness/package-lock.json
-
-      # Cache harness node_modules for faster, repeatable installs
-      - name: Cache harness node_modules
-        uses: actions/cache@v4
-        with:
-          path: tests/harness/node_modules
-          key: ${{ runner.os }}-harness-npm-${{ hashFiles('tests/harness/package-lock.json') }}
-          restore-keys: ${{ runner.os }}-harness-npm-
 
       # Cache Playwright browser artifacts
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ms-playwright
+          path: ${{ runner.temp }}/ms-playwright
           key: ${{ runner.os }}-playwright-browsers-${{ hashFiles('tests/harness/package-lock.json') }}
           restore-keys: ${{ runner.os }}-playwright-browsers-
 
@@ -92,11 +92,12 @@ jobs:
         env:
           SKIP_MUTATIONS: "1"
           CI: "true"
+          DOGE_ROD_REFUND_REPEATS: ${{ github.event.inputs.doge_refund_repeats || '3' }}
         run:  chmod +x tests/harness/run-all.sh && bash tests/harness/run-all.sh
 
       - name: Upload scenario reports
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: settlement-proof-reports
           path: tests/harness/e2e-report-*.json

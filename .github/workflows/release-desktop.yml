@@ -1,0 +1,160 @@
+name: Release desktop artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to release
+        required: true
+      draft:
+        description: Create the release as a draft
+        required: false
+        default: "true"
+
+concurrency:
+  group: release-desktop-${{ github.ref_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 18
+
+jobs:
+  verify:
+    name: Verify release gates and checksums
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Prove fast gates
+        run: chmod +x tests/run-fast.sh && chmod +x tests/harness/run-all.sh && bash tests/run-fast.sh
+
+      - name: Verify SHA256SUMS is current
+        run: |
+          node tests/update-checksums.js
+          git diff --exit-code -- SHA256SUMS
+
+  build:
+    name: Build ${{ matrix.name }} desktop artifact
+    needs: verify
+    runs-on: ${{ matrix.runs_on }}
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            runs_on: windows-latest
+            package_command: npm run package:win
+            artifact_name: release-electron-windows
+          - name: Linux
+            runs_on: ubuntu-latest
+            package_command: npm run package:linux
+            artifact_name: release-electron-linux
+          - name: macOS
+            runs_on: macos-latest
+            package_command: npm run package:mac
+            artifact_name: release-electron-macos
+    defaults:
+      run:
+        working-directory: electron
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install Electron dependencies
+        run: npm ci
+
+      - name: Run Electron smoke test
+        run: npm run test:smoke
+
+      - name: Build desktop package
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          APPLE_ID: ${{ secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '' }}
+          CSC_LINK: ${{ secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD || '' }}
+        run: ${{ matrix.package_command }}
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: electron/dist/**
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish desktop release
+    needs:
+      - verify
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Prepare release flags
+        id: release_flags
+        shell: bash
+        run: |
+          prerelease_flag=""
+          if [[ "$RELEASE_TAG" =~ (alpha|beta|rc) ]]; then
+            prerelease_flag="--prerelease"
+          fi
+
+          draft_flag=""
+          if [ "$RELEASE_DRAFT" = "true" ]; then
+            draft_flag="--draft"
+          fi
+
+          echo "prerelease_flag=$prerelease_flag" >> "$GITHUB_OUTPUT"
+          echo "draft_flag=$draft_flag" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        shell: bash
+        run: |
+          gh release create "$RELEASE_TAG" \
+            release-artifacts/release-electron-windows/* \
+            release-artifacts/release-electron-linux/* \
+            release-artifacts/release-electron-macos/* \
+            SHA256SUMS \
+            --title "$RELEASE_TAG" \
+            --generate-notes \
+            ${{ steps.release_flags.outputs.draft_flag }} \
+            ${{ steps.release_flags.outputs.prerelease_flag }}

@@ -11,6 +11,15 @@ const root = path.resolve(process.env.APP_DIR || path.join(__dirname, '..'));
 const results = [];
 const releaseInventoryDirectories = new Set(['css', 'fonts', 'images', 'js', 'tools']);
 
+function normalizeHashContent(relativePath) {
+	const data = fs.readFileSync(path.join(root, relativePath));
+	if (/\.(?:bat|css|html|js|json|md|svg|txt|webmanifest|ya?ml)$/i.test(relativePath) ||
+		!relativePath.includes('.')) {
+		return Buffer.from(data.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+	}
+	return data;
+}
+
 function check(name, fn) {
 	try {
 		const detail = fn() || '';
@@ -140,7 +149,7 @@ if (process.env.SKIP_RELEASE_INTEGRITY !== '1') {
 
 		for (const relative of files) {
 			const digest = crypto.createHash('sha256')
-				.update(fs.readFileSync(path.join(root, relative)))
+				.update(normalizeHashContent(relative))
 				.digest('hex');
 			assert.strictEqual(entries.get(relative), digest,
 				'SHA-256 mismatch for ' + relative);

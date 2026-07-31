@@ -148,7 +148,11 @@ jobs:
         id: release_assets
         shell: bash
         run: |
-          mapfile -d '' asset_files < <(find release-artifacts -type f -print0)
+          mapfile -d '' asset_files < <(find \
+            release-artifacts/release-electron-windows \
+            release-artifacts/release-electron-linux \
+            release-artifacts/release-electron-macos \
+            -maxdepth 1 -type f -print0)
           asset_files+=("SHA256SUMS")
 
           {

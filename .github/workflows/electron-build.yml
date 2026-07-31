@@ -59,7 +59,12 @@ jobs:
         run: npm ci
 
       - name: Run Electron smoke test
+        run: xvfb-run -a npm run test:smoke
+        if: ${{ matrix.runs_on == 'ubuntu-latest' }}
+
+      - name: Run Electron smoke test
         run: npm run test:smoke
+        if: ${{ matrix.runs_on != 'ubuntu-latest' }}
 
       - name: Build unsigned desktop package
         env:

@@ -25,9 +25,9 @@
     "package:all": "npm run sync-wallet && electron-builder -mwl --publish never"
   },
   "overrides": {
-    "@noble/hashes": "1.4.0",
+    "@noble/hashes": "1.8.0",
     "app-builder-lib": {
-      "@noble/hashes": "1.4.0"
+      "@noble/hashes": "1.8.0"
     }
   },
   "build": {
